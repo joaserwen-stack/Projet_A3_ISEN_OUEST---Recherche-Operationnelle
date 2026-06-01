@@ -1,9 +1,14 @@
+import time
 from data.objets import objets
 from partie1.q5_glouton import glouton
 
-n = len(objets)
-c = 0.6
-sac = glouton(objets, n, c)
+C = 0.6
+n = [1, 2, 5, 10, 15, 23]
 
-for objet in sac:
-    print(objet["nom"], objet["masse"], objet["utilite"])
+for i in n:
+    debut = time.time()
+    sac = glouton(objets[:i], i, C)
+    fin = time.time()
+
+    T = fin - debut
+    print(f"n={i}  temps={T:.10f} secondes")
