@@ -1,6 +1,7 @@
 import random
 import math
 from data.objets import objets
+import time
 
 # Thomas
 
@@ -52,16 +53,27 @@ def recuit_simule(objets, C, T=100.0, T_min=0.01, alpha=0.99, nb_iter=100):
     return meilleure_sol, meilleur_score
 
 if __name__ == "__main__":
-    C = 0.6
-    solution, score = recuit_simule(objets, C)
+    for C in [0.6, 2, 3, 4, 5]:
 
-    print(f"Résultat Recuit Simulé C = {C} kg\n")
-    poids_total = 0
+        debut = time.time()
 
-    for s, o in zip(solution, objets):
-        if s:
-            print(f" {o['nom']:<20} | {o['masse']} kg | utilité: {o['utilite']}")
-            poids_total += o["masse"]
+        solution, score = recuit_simule(objets, C)
 
-    print(f"\nPoids total embarqué : {poids_total} kg")
-    print(f"Utilité totale : {score}")
+        # Arrêt du chronomètre
+        temps_calcul = time.time() - debut
+
+        print(f"\n--- Résultat pour C = {C} ---")
+        poids_total = 0
+        composition = [] # Liste pour stocker le nom des objets pris
+
+        # Parcours de la solution pour récupérer la composition et le poids
+        for s, o in zip(solution, objets):
+            if s:
+                composition.append(o['nom'])
+                poids_total += o["masse"]
+
+        # Affichage des résultats demandés
+        print(f"Composition du sac : {', '.join(composition)}")
+        print(f"Poids total embarqué : {poids_total} kg")
+        print(f"Utilité totale : {score}")
+        print(f"Temps de calcul : {temps_calcul:.6f} secondes")
