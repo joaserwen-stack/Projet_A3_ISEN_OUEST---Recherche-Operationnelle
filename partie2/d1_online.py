@@ -3,7 +3,7 @@ from utils import load_marchandises, print_results
 
 WAGON_MAX_LENGTH = 11.583
 
-def first_fit_decreasing(marchandises):
+def first_fit_online(marchandises):
     wagons = []
     wagons_content = []
 
@@ -26,7 +26,7 @@ def first_fit_decreasing(marchandises):
 
     return wagons, wagons_content
 
-def best_fit_decreasing(marchandises):
+def best_fit_online(marchandises):
     wagons = []
     wagons_content = []
 
@@ -61,7 +61,7 @@ if __name__ == "__main__":
 
     if items:
         start_time = time.time()
-        remains, content = first_fit_decreasing(items)
+        remains, content = first_fit_online(items)
         temps = time.time() - start_time
 
         nb_wagons = len(remains)
@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
         print("\n\nd=1 Online Best-fit")
         start_time = time.time()
-        remains_bf, content_bf = best_fit_decreasing(items)
+        remains_bf, content_bf = best_fit_online(items)
         temps = time.time() - start_time
 
         nb_wagons_bf = len(remains_bf)
