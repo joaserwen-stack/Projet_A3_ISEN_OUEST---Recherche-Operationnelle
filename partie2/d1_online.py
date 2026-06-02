@@ -8,8 +8,8 @@ def first_fit_online(marchandises):
     wagons_content = []
 
     # Rangement des marchandises une par une
-    for item in marchandises:
-        placed = False
+    for item in marchandises: # On traite les marchandises dans l'ordre d'arrivée (online)
+        placed = False 
 
         # On parcourt les wagons existants pour trouver le premier qui a assez de place
         for i in range(len(wagons)):
