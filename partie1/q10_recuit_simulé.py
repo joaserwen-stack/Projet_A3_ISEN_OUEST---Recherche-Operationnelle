@@ -2,6 +2,7 @@ import random
 import math
 from data.objets import objets
 
+# Thomas
 
 def evaluer_solution(solution, masses, utilites, C):
     poids, utilite = 0, 0

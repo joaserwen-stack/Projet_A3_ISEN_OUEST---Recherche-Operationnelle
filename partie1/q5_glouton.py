@@ -1,5 +1,7 @@
 from data.objets import objets
 
+# Thomas
+
 def glouton(objets, n, C):
     masse_totale = 0
     sac = []

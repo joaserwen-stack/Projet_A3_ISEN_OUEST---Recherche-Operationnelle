@@ -1,10 +1,7 @@
 import time
-import sys
-import os
-
-# L'astuce pour que Python trouve le dossier 'data'
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data.objets import objets
+
+# Joas
 
 def sac_a_dos_exact(capacite_max):
     n = len(objets)
@@ -43,13 +40,13 @@ def sac_a_dos_exact(capacite_max):
 
 if __name__ == "__main__":
     capacites_a_tester = [2, 3, 4, 5]
-    print("Démarrage de la Force Brute (Méthode Binaire)...")
+    print("Brute Force")
     for C in capacites_a_tester:
         debut = time.time()
         sac_optimal, utilite_max = sac_a_dos_exact(C)
         fin = time.time()
         
         temps_execution = round(fin - debut, 2)
-        print(f"\n--- Résultat pour C = {C} kg ---")
+        print(f"\n Résultat pour C = {C} kg")
         print(f"Utilité maximale : {utilite_max}")
         print(f"Temps de calcul  : {temps_execution} secondes")
