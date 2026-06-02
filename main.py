@@ -16,8 +16,8 @@ for i in n:
 
 
 
-print("--- 2. Lancement de l'Algorithme Exact (Force Brute) ---")
-print("(Attente...)")
+print("\n--- 2. Lancement de l'Algorithme Exact (Force Brute) ---\n")
+print("(Attente...)\n")
 
 debut_force = time.time()
 sac_joas, utilite_joas = sac_a_dos_exact(C)

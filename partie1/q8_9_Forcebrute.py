@@ -1,4 +1,9 @@
 import time
+import sys
+import os
+
+# L'astuce pour que Python trouve le dossier 'data'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data.objets import objets
 
 def sac_a_dos_exact(capacite_max):
