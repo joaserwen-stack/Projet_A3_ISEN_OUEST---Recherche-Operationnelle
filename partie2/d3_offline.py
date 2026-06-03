@@ -1,4 +1,4 @@
-"""Bin-Packing 3D Offline — DBLF Normalisé + Algorithme Génétique"""
+"""Bin-Packing 3D Offline — DBLF Normalisé + Algorithme Génétique + LNS"""
 import sys
 import time
 import random
@@ -18,6 +18,7 @@ EPS        = 1e-6
 POP_SIZE = 80
 N_GEN    = 200
 STAG_MAX = 20
+LNS_ITER = 3000
 
 _ROT6 = [(0,1,2),(0,2,1),(1,0,2),(1,2,0),(2,0,1),(2,1,0)]
 _ROT2 = [(0,1,2),(1,0,2)]
@@ -67,11 +68,11 @@ class Wagon:
     def _contact_area(self, x: float, y: float, z: float, dx: float, dy: float, dz: float) -> float:
         x2, y2, z2 = x + dx, y + dy, z + dz
         area = 0.0
-        if x  <= EPS:          area += dy * dz
+        if x  <= EPS:           area += dy * dz
         if abs(x2 - WX) <= EPS: area += dy * dz
-        if y  <= EPS:          area += dx * dz
+        if y  <= EPS:           area += dx * dz
         if abs(y2 - WY) <= EPS: area += dx * dz
-        if z  <= EPS:          area += dx * dy
+        if z  <= EPS:           area += dx * dy
         if abs(z2 - WZ) <= EPS: area += dx * dy
         for p in self.placed_items:
             px2, py2, pz2 = p.x+p.dx, p.y+p.dy, p.z+p.dz
@@ -115,12 +116,12 @@ class Wagon:
                     s.z >= iz+ih-EPS or s.z+s.h <= iz+EPS):
                 surviving.append(s)
             else:
-                if ix       > s.x+EPS:       generated.append(Space(s.x,   s.y,   s.z,   ix-s.x,          s.l,          s.h))
-                if ix+iw    < s.x+s.w-EPS:   generated.append(Space(ix+iw, s.y,   s.z,   s.x+s.w-(ix+iw), s.l,          s.h))
-                if iy       > s.y+EPS:        generated.append(Space(s.x,   s.y,   s.z,   s.w,             iy-s.y,       s.h))
-                if iy+il    < s.y+s.l-EPS:   generated.append(Space(s.x,   iy+il, s.z,   s.w,             s.y+s.l-(iy+il), s.h))
-                if iz       > s.z+EPS:        generated.append(Space(s.x,   s.y,   s.z,   s.w,             s.l,          iz-s.z))
-                if iz+ih    < s.z+s.h-EPS:   generated.append(Space(s.x,   s.y,   iz+ih, s.w,             s.l,          s.z+s.h-(iz+ih)))
+                if ix    > s.x+EPS:     generated.append(Space(s.x,   s.y,   s.z,   ix-s.x,          s.l,             s.h))
+                if ix+iw < s.x+s.w-EPS: generated.append(Space(ix+iw, s.y,   s.z,   s.x+s.w-(ix+iw), s.l,             s.h))
+                if iy    > s.y+EPS:     generated.append(Space(s.x,   s.y,   s.z,   s.w,             iy-s.y,          s.h))
+                if iy+il < s.y+s.l-EPS: generated.append(Space(s.x,   iy+il, s.z,   s.w,             s.y+s.l-(iy+il), s.h))
+                if iz    > s.z+EPS:     generated.append(Space(s.x,   s.y,   s.z,   s.w,             s.l,             iz-s.z))
+                if iz+ih < s.z+s.h-EPS: generated.append(Space(s.x,   s.y,   iz+ih, s.w,             s.l,             s.z+s.h-(iz+ih)))
 
         self.spaces = surviving + generated
         self.spaces.sort(key=lambda s: s.vol, reverse=True)
@@ -204,6 +205,41 @@ def _next_gen(scored, best_wagons: List[Wagon], id_to_idx: dict, n: int) -> List
     return pop
 
 
+def _lns_improve(seq: List[int], wagons: List[Wagon], items: List[Item3D],
+                 id_to_idx: dict, n: int) -> tuple:
+    """
+    Large Neighborhood Search: hill-climbing après GA.
+    Extrait des items du dernier wagon, les réinsère ailleurs, accepte si mieux.
+    """
+    best_seq    = seq.copy()
+    best_wagons = wagons
+    best_fit    = len(wagons) + wagons[-1].vol_used / WVOL
+
+    for _ in range(LNS_ITER):
+        last_idxs = [id_to_idx[p.item.id] for p in best_wagons[-1].placed_items]
+        if not last_idxs:
+            break
+
+        candidate = best_seq.copy()
+        k = min(len(last_idxs), random.randint(1, 3))
+        targets = random.sample(last_idxs, k)
+
+        for t in targets:
+            candidate.remove(t)
+        for t in targets:
+            # Réinsérer dans les 30% premiers — zone de "priorité haute"
+            candidate.insert(random.randint(0, max(1, int(n * 0.30))), t)
+
+        cand_wagons = decode_sequence(candidate, items)
+        cand_fit    = len(cand_wagons) + cand_wagons[-1].vol_used / WVOL
+
+        if cand_fit < best_fit:
+            best_seq, best_wagons, best_fit = candidate, cand_wagons, cand_fit
+            print(f"  [LNS] {len(best_wagons)} wagons  (fitness {best_fit:.4f})")
+
+    return best_seq, best_wagons
+
+
 if __name__ == '__main__':
     data = load_marchandises()
     if not data:
@@ -225,7 +261,7 @@ if __name__ == '__main__':
     while len(pop) < POP_SIZE:
         seq = base.copy(); random.shuffle(seq); pop.append(seq)
 
-    best_n, best_fit, best_wagons = float('inf'), float('inf'), None
+    best_n, best_fit, best_seq, best_wagons = float('inf'), float('inf'), None, None
     stag = 0
 
     t0 = time.time()
@@ -233,10 +269,10 @@ if __name__ == '__main__':
 
     for gen in range(N_GEN):
         scored = _evaluate(pop, items)
-        fit, n_wagons, _, wagons = scored[0]
+        fit, n_wagons, seq, wagons = scored[0]
 
         if n_wagons < best_n or (n_wagons == best_n and fit < best_fit - EPS):
-            best_n, best_fit, best_wagons = n_wagons, fit, wagons
+            best_n, best_fit, best_seq, best_wagons = n_wagons, fit, seq.copy(), wagons
             print(f"  [{gen:3d}] {best_n} wagons  (fitness {best_fit:.4f})")
             stag = 0
         else:
@@ -248,6 +284,10 @@ if __name__ == '__main__':
             stag = 0
         else:
             pop = _next_gen(scored, best_wagons, id_to_idx, n)
+
+    print(f"\n  --- LNS ({LNS_ITER} itérations) ---")
+    best_seq, best_wagons = _lns_improve(best_seq, best_wagons, items, id_to_idx, n)
+    best_n = len(best_wagons)
 
     elapsed = time.time() - t0
     print(f"\n{'='*55}")
