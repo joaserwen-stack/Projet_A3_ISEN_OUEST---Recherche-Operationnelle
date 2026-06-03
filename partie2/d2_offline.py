@@ -14,16 +14,21 @@ EPS = 1e-9
 
 def remplir_wagons(objets):
     """
-    Algorithme de placement Bin-Packing 2D — mode Online (MaxRects BLSF).
-    Mode Online : les objets arrivent dans l'ordre du fichier, sans tri préalable.
-    On doit placer chaque objet immédiatement, sans connaître la suite.
+    Algorithme de placement Bin-Packing 2D — mode Offline (MaxRects BSSF).
+    Mode Offline : on connaît tous les objets à l'avance, on les trie
+    du plus grand au plus petit pour faciliter le placement.
     L'objectif est de ranger tous les objets dans un minimum de wagons.
     """
+    # On trie les objets du plus grand au plus petit selon leur surface.
+    # Placer les gros objets en premier évite de se retrouver bloqué
+    # avec un grand objet et plus aucun wagon avec assez de place.
+    objets_tries = sorted(objets, key=lambda obj: obj['longueur'] * obj['largeur'], reverse=True)
+
     # Liste qui contiendra tous nos wagons et leur contenu
     wagons = []
 
-    # On prend chaque objet dans l'ordre d'arrivée, sans possibilité de réorganiser
-    for objet in objets:
+    # On prend chaque objet un par un et on cherche où le placer
+    for objet in objets_tries:
         placer_objet(wagons, objet)
 
     return wagons
@@ -32,8 +37,8 @@ def remplir_wagons(objets):
 def placer_objet(wagons, objet):
     """
     Cherche la meilleure place possible pour un objet dans les wagons déjà ouverts.
-    Stratégie : Best Long Side Fit (BLSF) — on choisit l'espace libre dont le plus
-    grand côté résiduel est minimal, ce qui compacte au mieux les objets dans l'espace.
+    Stratégie : Best Short Side Fit (BSSF) — on choisit l'espace libre dont le plus
+    petit côté résiduel est minimal, ce qui colle l'objet au mieux dans les coins.
     Si aucune place n'est trouvée, on ouvre un nouveau wagon vide.
     """
     obj_longueur = objet['longueur']
@@ -60,9 +65,9 @@ def placer_objet(wagons, objet):
 
             # --- Essai 1 : Placer l'objet dans cet espace SANS le tourner ---
             if ok_normal and obj_longueur <= espace_largeur + EPS and obj_largeur <= espace_hauteur + EPS:
-                # Score BLSF : on minimise le plus grand côté résiduel.
+                # Score BSSF : on minimise le plus petit côté résiduel.
                 # Un résidu minimal signifie que l'objet s'emboite au mieux dans l'espace.
-                score = max(espace_largeur - obj_longueur, espace_hauteur - obj_largeur)
+                score = min(espace_largeur - obj_longueur, espace_hauteur - obj_largeur)
 
                 # On note ce choix s'il est meilleur que le précédent
                 if meilleur_score is None or score < meilleur_score:
@@ -71,7 +76,7 @@ def placer_objet(wagons, objet):
 
             # --- Essai 2 : Placer l'objet dans cet espace EN LE TOURNANT ---
             if ok_pivote and obj_largeur <= espace_largeur + EPS and obj_longueur <= espace_hauteur + EPS:
-                score = max(espace_largeur - obj_largeur, espace_hauteur - obj_longueur)
+                score = min(espace_largeur - obj_largeur, espace_hauteur - obj_longueur)
 
                 if meilleur_score is None or score < meilleur_score:
                     meilleur_score = score
@@ -206,7 +211,7 @@ def nettoyer_espaces_inutiles(espaces):
 
 if __name__ == "__main__":
     print("=" * 65)
-    print("  Bin-Packing 2D Online — MaxRects BLSF")
+    print("  Bin-Packing 2D Offline — MaxRects BSSF")
     print("=" * 65)
 
     # Lecture du fichier CSV contenant les marchandises à charger
@@ -223,11 +228,11 @@ if __name__ == "__main__":
     temps_ecoule = time.time() - debut_chrono
 
     # Calculs des métriques de performance
-    nb_wagons_utilises        = len(wagons_remplis)
-    surface_dun_wagon         = LONGUEUR_WAGON * LARGEUR_WAGON
+    nb_wagons_utilises       = len(wagons_remplis)
+    surface_dun_wagon        = LONGUEUR_WAGON * LARGEUR_WAGON
     surface_totale_disponible = nb_wagons_utilises * surface_dun_wagon
-    surface_totale_objets     = sum(obj['longueur'] * obj['largeur'] for obj in objets_a_placer)
-    surface_vide_perdue       = surface_totale_disponible - surface_totale_objets
+    surface_totale_objets    = sum(obj['longueur'] * obj['largeur'] for obj in objets_a_placer)
+    surface_vide_perdue      = surface_totale_disponible - surface_totale_objets
 
     # La borne inférieure est le nombre minimal de wagons théoriquement nécessaires
     # si l'on pouvait découper et réarranger les objets librement (comme un liquide)
@@ -237,7 +242,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 65 + "\n  RÉSULTAT\n" + "=" * 65)
     print_results(
         dimension_label="d=2",
-        mode_label="Online (MaxRects BLSF)",
+        mode_label="Offline (MaxRects BSSF)",
         nb_wagons=nb_wagons_utilises,
         total_unused=surface_vide_perdue,
         execution_time=temps_ecoule

@@ -1,5 +1,4 @@
 import time
-import os
 import matplotlib.pyplot as plt
 from utils import load_marchandises
 
