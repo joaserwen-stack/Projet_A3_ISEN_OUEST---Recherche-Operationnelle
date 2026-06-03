@@ -21,7 +21,7 @@ def first_fit_3d_level(marchandises, LONGUEUR_MAX, LARGEUR_MAX, HAUTEUR_MAX):
         
         # Sécurité : Si un objet est physiquement plus grand que le wagon vide, on le jette
         if long_obj > LONGUEUR_MAX or larg_obj > LARGEUR_MAX or haut_obj > HAUTEUR_MAX:
-            print(f"⚠️ Objet {item['id']} impossible à ranger !")
+            print(f" Objet {item['id']} impossible à ranger !")
             continue
             
         # 1. Débordement en LONGUEUR ? -> On crée une nouvelle rangée (On recule en Y)
