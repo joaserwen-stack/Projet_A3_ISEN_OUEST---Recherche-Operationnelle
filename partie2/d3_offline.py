@@ -1,15 +1,15 @@
-"""Bin-Packing 3D Offline — DBLF Normalisé + Algorithme Génétique + LNS"""
+"""Bin-Packing 3D Offline — DBLF Normalisé + Algorithme Génétique"""
 import sys
 import time
 import random
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 try:
     sys.path.insert(0, __file__[:__file__.rfind('/')])
     from utils import load_marchandises, print_results
 except ImportError:
     def load_marchandises(): return []
-    def print_results(*args, **kwargs): pass
+    def print_results(*_, **__): pass
 
 WX, WY, WZ = 11.583, 2.294, 2.569
 WVOL       = WX * WY * WZ
@@ -18,10 +18,13 @@ EPS        = 1e-6
 POP_SIZE = 80
 N_GEN    = 200
 STAG_MAX = 20
-LNS_ITER = 3000
 
 _ROT6 = [(0,1,2),(0,2,1),(1,0,2),(1,2,0),(2,0,1),(2,1,0)]
 _ROT2 = [(0,1,2),(1,0,2)]
+
+
+def _overlap(a1: float, a2: float, b1: float, b2: float) -> float:
+    return max(0.0, min(a2, b2) - max(a1, b1))
 
 
 class Item3D:
@@ -40,7 +43,8 @@ class Item3D:
 class PlacedItem:
     __slots__ = ('item', 'x', 'y', 'z', 'dx', 'dy', 'dz')
 
-    def __init__(self, item: Item3D, x: float, y: float, z: float, dx: float, dy: float, dz: float):
+    def __init__(self, item: Item3D, x: float, y: float, z: float,
+                 dx: float, dy: float, dz: float):
         self.item = item
         self.x, self.y, self.z = x, y, z
         self.dx, self.dy, self.dz = dx, dy, dz
@@ -65,23 +69,24 @@ class Wagon:
     def vol_free(self) -> float:
         return WVOL - self.vol_used
 
-    def _contact_area(self, x: float, y: float, z: float, dx: float, dy: float, dz: float) -> float:
+    def _contact_area(self, x: float, y: float, z: float,
+                      dx: float, dy: float, dz: float) -> float:
         x2, y2, z2 = x + dx, y + dy, z + dz
         area = 0.0
-        if x  <= EPS:           area += dy * dz
+        if x  <= EPS:            area += dy * dz
         if abs(x2 - WX) <= EPS: area += dy * dz
-        if y  <= EPS:           area += dx * dz
+        if y  <= EPS:            area += dx * dz
         if abs(y2 - WY) <= EPS: area += dx * dz
-        if z  <= EPS:           area += dx * dy
+        if z  <= EPS:            area += dx * dy
         if abs(z2 - WZ) <= EPS: area += dx * dy
         for p in self.placed_items:
             px2, py2, pz2 = p.x+p.dx, p.y+p.dy, p.z+p.dz
             if abs(x-px2) <= EPS or abs(x2-p.x) <= EPS:
-                area += max(0.0, min(y2,py2)-max(y,p.y)) * max(0.0, min(z2,pz2)-max(z,p.z))
+                area += _overlap(y, y2, p.y, py2) * _overlap(z, z2, p.z, pz2)
             if abs(y-py2) <= EPS or abs(y2-p.y) <= EPS:
-                area += max(0.0, min(x2,px2)-max(x,p.x)) * max(0.0, min(z2,pz2)-max(z,p.z))
+                area += _overlap(x, x2, p.x, px2) * _overlap(z, z2, p.z, pz2)
             if abs(z-pz2) <= EPS or abs(z2-p.z) <= EPS:
-                area += max(0.0, min(x2,px2)-max(x,p.x)) * max(0.0, min(y2,py2)-max(y,p.y))
+                area += _overlap(x, x2, p.x, px2) * _overlap(y, y2, p.y, py2)
         return area
 
     def place_item(self, item: Item3D) -> bool:
@@ -108,39 +113,32 @@ class Wagon:
         self._split_spaces(sp.x, sp.y, sp.z, dx, dy, dz)
         return True
 
-    def _split_spaces(self, ix: float, iy: float, iz: float, iw: float, il: float, ih: float):
-        surviving, generated = [], []
-        for s in self.spaces:
-            if (s.x >= ix+iw-EPS or s.x+s.w <= ix+EPS or
-                    s.y >= iy+il-EPS or s.y+s.l <= iy+EPS or
-                    s.z >= iz+ih-EPS or s.z+s.h <= iz+EPS):
-                surviving.append(s)
-            else:
-                if ix    > s.x+EPS:     generated.append(Space(s.x,   s.y,   s.z,   ix-s.x,          s.l,             s.h))
-                if ix+iw < s.x+s.w-EPS: generated.append(Space(ix+iw, s.y,   s.z,   s.x+s.w-(ix+iw), s.l,             s.h))
-                if iy    > s.y+EPS:     generated.append(Space(s.x,   s.y,   s.z,   s.w,             iy-s.y,          s.h))
-                if iy+il < s.y+s.l-EPS: generated.append(Space(s.x,   iy+il, s.z,   s.w,             s.y+s.l-(iy+il), s.h))
-                if iz    > s.z+EPS:     generated.append(Space(s.x,   s.y,   s.z,   s.w,             s.l,             iz-s.z))
-                if iz+ih < s.z+s.h-EPS: generated.append(Space(s.x,   s.y,   iz+ih, s.w,             s.l,             s.z+s.h-(iz+ih)))
-
-        self.spaces = surviving + generated
-        self.spaces.sort(key=lambda s: s.vol, reverse=True)
-
-        final: List[Space] = []
-        for s1 in self.spaces:
-            if not any(s1.x >= s2.x-EPS and s1.y >= s2.y-EPS and s1.z >= s2.z-EPS and
-                       s1.x+s1.w <= s2.x+s2.w+EPS and s1.y+s1.l <= s2.y+s2.l+EPS and
-                       s1.z+s1.h <= s2.z+s2.h+EPS for s2 in final):
-                final.append(s1)
-        self.spaces = final
+    def _split_spaces(self, ix: float, iy: float, iz: float,
+                      iw: float, il: float, ih: float) -> None:
+        keep: List[Space] = []
+        new:  List[Space] = []
+        for sp in self.spaces:
+            if (sp.x+sp.w <= ix+EPS or sp.x >= ix+iw-EPS or
+                    sp.y+sp.l <= iy+EPS or sp.y >= iy+il-EPS or
+                    sp.z+sp.h <= iz+EPS or sp.z >= iz+ih-EPS):
+                keep.append(sp)
+                continue
+            sx, sy, sz, sw, sl, sh = sp.x, sp.y, sp.z, sp.w, sp.l, sp.h
+            if ix+iw < sx+sw-EPS: new.append(Space(ix+iw, sy,    sz,    sx+sw-ix-iw, sl,       sh      ))
+            if sx    < ix-EPS:    new.append(Space(sx,    sy,    sz,    ix-sx,        sl,       sh      ))
+            if iy+il < sy+sl-EPS: new.append(Space(sx,    iy+il, sz,    sw,           sy+sl-iy-il, sh   ))
+            if sy    < iy-EPS:    new.append(Space(sx,    sy,    sz,    sw,           iy-sy,    sh      ))
+            if iz+ih < sz+sh-EPS: new.append(Space(sx,    sy,    iz+ih, sw,           sl,       sz+sh-iz-ih))
+            if sz    < iz-EPS:    new.append(Space(sx,    sy,    sz,    sw,           sl,       iz-sz   ))
+        self.spaces = keep + new
 
 
 def decode_sequence(seq: List[int], items: List[Item3D]) -> List[Wagon]:
-    wagons = [Wagon()]
+    wagons: List[Wagon] = [Wagon()]
     for idx in seq:
         item = items[idx]
         if not any(w.place_item(item) for w in wagons):
-            w = Wagon(); w.place_item(item); wagons.append(w)
+            nw = Wagon(); nw.place_item(item); wagons.append(nw)
     return wagons
 
 
@@ -156,9 +154,9 @@ def crossover_ox(p1: List[int], p2: List[int], a: int, b: int) -> List[int]:
     return child
 
 
-def _evaluate(pop: List[List[int]], items: List[Item3D]):
+def _evaluate(seq_pop: List[List[int]], items: List[Item3D]):
     scored = []
-    for seq in pop:
+    for seq in seq_pop:
         wagons = decode_sequence(seq, items)
         fitness = len(wagons) + wagons[-1].vol_used / WVOL
         scored.append((fitness, len(wagons), seq, wagons))
@@ -166,89 +164,57 @@ def _evaluate(pop: List[List[int]], items: List[Item3D]):
     return scored
 
 
-def _cataclysm(elite: List[List[int]], heuristics: List[List[int]], n: int) -> List[List[int]]:
-    pop = [s.copy() for s in elite[:3]]
-    while len(pop) < POP_SIZE:
+def _cataclysm(elite: List[List[int]], heuristics: List[List[int]], n_items: int) -> List[List[int]]:
+    result = [s.copy() for s in elite[:3]]
+    while len(result) < POP_SIZE:
         seq = random.choice(heuristics).copy()
         for _ in range(random.randint(3, 12)):
-            a, b = random.sample(range(n), 2)
+            a, b = random.sample(range(n_items), 2)
             seq[a], seq[b] = seq[b], seq[a]
-        pop.append(seq)
-    return pop
+        result.append(seq)
+    return result
 
 
-def _next_gen(scored, best_wagons: List[Wagon], id_to_idx: dict, n: int) -> List[List[int]]:
-    pop = [scored[0][2].copy(), scored[1][2].copy()]
+def _next_gen(scored, best_wagons: List[Wagon], id_to_idx: dict, n_items: int) -> List[List[int]]:
+    result = [scored[0][2].copy(), scored[1][2].copy()]
 
-    while len(pop) < POP_SIZE:
+    while len(result) < POP_SIZE:
         c1, c2 = random.choice(scored), random.choice(scored)
-        pop.append((c1 if c1[0] < c2[0] else c2)[2].copy())
+        result.append((c1 if c1[0] < c2[0] else c2)[2].copy())
 
     for i in range(2, POP_SIZE - 1, 2):
         if random.random() < 0.85:
-            a, b = sorted(random.sample(range(n), 2))
-            p1, p2 = pop[i], pop[i+1]
-            pop[i], pop[i+1] = crossover_ox(p1, p2, a, b), crossover_ox(p2, p1, a, b)
+            a, b = sorted(random.sample(range(n_items), 2))
+            p1, p2 = result[i], result[i+1]
+            result[i], result[i+1] = crossover_ox(p1, p2, a, b), crossover_ox(p2, p1, a, b)
 
     for i in range(2, POP_SIZE):
         if random.random() < 0.35:
-            if random.random() < 0.5 and best_wagons:
+            if random.random() < 0.5:
                 overflow = [id_to_idx[p.item.id] for p in best_wagons[-1].placed_items]
                 if overflow:
                     target = random.choice(overflow)
-                    if target in pop[i]:
-                        pos = pop[i].index(target)
-                        pop[i].insert(random.randint(0, int(n * 0.10)), pop[i].pop(pos))
+                    if target in result[i]:
+                        pos = result[i].index(target)
+                        result[i].insert(random.randint(0, int(n_items * 0.10)), result[i].pop(pos))
             else:
-                a, b = random.sample(range(n), 2)
-                pop[i][a], pop[i][b] = pop[i][b], pop[i][a]
-    return pop
+                a, b = random.sample(range(n_items), 2)
+                result[i][a], result[i][b] = result[i][b], result[i][a]
+    return result
 
 
-def _lns_improve(seq: List[int], wagons: List[Wagon], items: List[Item3D],
-                 id_to_idx: dict, n: int) -> tuple:
-    """
-    Large Neighborhood Search: hill-climbing après GA.
-    Extrait des items du dernier wagon, les réinsère ailleurs, accepte si mieux.
-    """
-    best_seq    = seq.copy()
-    best_wagons = wagons
-    best_fit    = len(wagons) + wagons[-1].vol_used / WVOL
-
-    for _ in range(LNS_ITER):
-        last_idxs = [id_to_idx[p.item.id] for p in best_wagons[-1].placed_items]
-        if not last_idxs:
-            break
-
-        candidate = best_seq.copy()
-        k = min(len(last_idxs), random.randint(1, 3))
-        targets = random.sample(last_idxs, k)
-
-        for t in targets:
-            candidate.remove(t)
-        for t in targets:
-            # Réinsérer dans les 30% premiers — zone de "priorité haute"
-            candidate.insert(random.randint(0, max(1, int(n * 0.30))), t)
-
-        cand_wagons = decode_sequence(candidate, items)
-        cand_fit    = len(cand_wagons) + cand_wagons[-1].vol_used / WVOL
-
-        if cand_fit < best_fit:
-            best_seq, best_wagons, best_fit = candidate, cand_wagons, cand_fit
-            print(f"  [LNS] {len(best_wagons)} wagons  (fitness {best_fit:.4f})")
-
-    return best_seq, best_wagons
-
-
-if __name__ == '__main__':
+def main() -> None:
     data = load_marchandises()
     if not data:
         sys.exit(0)
 
-    items = [Item3D(d['id'], d['nom'], (d['longueur'], d['largeur'], d['hauteur']), bool(d['retournable'])) for d in data]
+    items = [
+        Item3D(d['id'], d['nom'], (d['longueur'], d['largeur'], d['hauteur']), bool(d['retournable']))
+        for d in data
+    ]
     id_to_idx = {obj.id: i for i, obj in enumerate(items)}
-    n = len(items)
-    base = list(range(n))
+    n_items = len(items)
+    base = list(range(n_items))
 
     heuristics = [
         sorted(base, key=lambda i: items[i].vol, reverse=True),
@@ -261,7 +227,9 @@ if __name__ == '__main__':
     while len(pop) < POP_SIZE:
         seq = base.copy(); random.shuffle(seq); pop.append(seq)
 
-    best_n, best_fit, best_seq, best_wagons = float('inf'), float('inf'), None, None
+    best_n:      float       = float('inf')
+    best_fit:    float       = float('inf')
+    best_wagons: List[Wagon] = []
     stag = 0
 
     t0 = time.time()
@@ -269,10 +237,10 @@ if __name__ == '__main__':
 
     for gen in range(N_GEN):
         scored = _evaluate(pop, items)
-        fit, n_wagons, seq, wagons = scored[0]
+        fit, n_wagons, _, wagons = scored[0]
 
         if n_wagons < best_n or (n_wagons == best_n and fit < best_fit - EPS):
-            best_n, best_fit, best_seq, best_wagons = n_wagons, fit, seq.copy(), wagons
+            best_n, best_fit, best_wagons = n_wagons, fit, wagons
             print(f"  [{gen:3d}] {best_n} wagons  (fitness {best_fit:.4f})")
             stag = 0
         else:
@@ -280,20 +248,20 @@ if __name__ == '__main__':
 
         if stag >= STAG_MAX:
             print(f"  [{gen:3d}] Redémarrage")
-            pop = _cataclysm([s[2] for s in scored], heuristics, n)
+            pop = _cataclysm([s[2] for s in scored], heuristics, n_items)
             stag = 0
         else:
-            pop = _next_gen(scored, best_wagons, id_to_idx, n)
-
-    print(f"\n  --- LNS ({LNS_ITER} itérations) ---")
-    best_seq, best_wagons = _lns_improve(best_seq, best_wagons, items, id_to_idx, n)
-    best_n = len(best_wagons)
+            pop = _next_gen(scored, best_wagons, id_to_idx, n_items)
 
     elapsed = time.time() - t0
     print(f"\n{'='*55}")
-    print(f"  Résultat : {best_n} wagons  |  {elapsed:.2f} s")
+    print(f"  Résultat : {int(best_n)} wagons  |  {elapsed:.2f} s")
     print("=" * 55)
 
-    print_results("d=3", "Offline", best_n, best_wagons[-1].vol_free, elapsed)
+    print_results("d=3", "Offline", int(best_n), best_wagons[-1].vol_free, elapsed)
     taux = 100.0 * sum(w.vol_used for w in best_wagons) / (best_n * WVOL)
     print(f"  Taux d'occupation : {taux:.1f}%")
+
+
+if __name__ == '__main__':
+    main()
