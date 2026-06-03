@@ -22,7 +22,8 @@ def load_marchandises(csv_filename="Données_marchandises.csv"):
                     'nom': row[1].strip(),
                     'longueur': float(row[2]),
                     'largeur': float(row[3]),
-                    'hauteur': float(row[4])
+                    'hauteur': float(row[4]),
+                    'retournable': int(row[5]) if len(row) > 5 else 1
                 })
             except (ValueError, IndexError) as e:
                 continue
