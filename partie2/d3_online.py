@@ -2,9 +2,9 @@ import time
 import math
 from utils import load_marchandises, print_results
 
-# Dimensions wagon standard
 L_WAG, l_WAG, H_WAG = 11.583, 2.294, 2.569
 VOL_WAG = L_WAG * l_WAG * H_WAG
+EPS = 1e-4
 
 
 class Marchandise:
@@ -32,39 +32,71 @@ class Wagon:
 
     def intersecte(self, b1: tuple) -> bool:
         for b2 in self.boites:
-            if (b1[0] < b2[0] + b2[3] - 1e-4 and b1[0] + b1[3] > b2[0] + 1e-4 and
-                    b1[1] < b2[1] + b2[4] - 1e-4 and b1[1] + b1[4] > b2[1] + 1e-4 and
-                    b1[2] < b2[2] + b2[5] - 1e-4 and b1[2] + b1[5] > b2[2] + 1e-4):
+            if (b1[0] < b2[0] + b2[3] - EPS and b1[0] + b1[3] > b2[0] + EPS and
+                    b1[1] < b2[1] + b2[4] - EPS and b1[1] + b1[4] > b2[1] + EPS and
+                    b1[2] < b2[2] + b2[5] - EPS and b1[2] + b1[5] > b2[2] + EPS):
                 return True
         return False
 
     def est_supportee(self, xmin: float, xmax: float, ymin: float, ymax: float,
-                      zmin: float, seuil: float = 0.70) -> bool:
-        if zmin <= 1e-4:
+                      zmin: float, seuil: float = 0.55) -> bool:
+        if zmin <= EPS:
             return True
 
         aire_base = (xmax - xmin) * (ymax - ymin)
         aire_support = 0.0
 
-        for b_xmin, b_ymin, b_zmin, b_L, b_l, b_H in self.boites:
-            if abs(b_zmin + b_H - zmin) <= 1e-4:
-                ix_min = max(xmin, b_xmin)
-                ix_max = min(xmax, b_xmin + b_L)
-                iy_min = max(ymin, b_ymin)
-                iy_max = min(ymax, b_ymin + b_l)
-                if ix_max > ix_min and iy_max > iy_min:
-                    aire_support += (ix_max - ix_min) * (iy_max - iy_min)
+        for bx, by, bz, bL, bl, bH in self.boites:
+            if abs(bz + bH - zmin) <= EPS:
+                ox = min(xmax, bx + bL) - max(xmin, bx)
+                oy = min(ymax, by + bl) - max(ymin, by)
+                if ox > 0 and oy > 0:
+                    aire_support += ox * oy
 
         return (aire_support / aire_base) >= seuil
 
+    def _ajouter_coin(self, x: float, y: float, z: float) -> None:
+        if x <= L_WAG and y <= l_WAG and z <= H_WAG:
+            self.coins.add((x, y, z))
+
     def placer(self, coin: tuple, rL: float, rl: float, rH: float) -> None:
         cx, cy, cz = coin
+        n_avant = len(self.boites)
         self.boites.append((cx, cy, cz, rL, rl, rH))
         self.vol_used += rL * rl * rH
         self.coins.discard(coin)
-        for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
-            if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
-                self.coins.add(npt)
+
+        xf, yf, zf = cx + rL, cy + rl, cz + rH
+
+        # Points standards (3 coins de la nouvelle boîte)
+        self._ajouter_coin(xf, cy, cz)
+        self._ajouter_coin(cx, yf, cz)
+        self._ajouter_coin(cx, cy, zf)
+
+        # Extreme points : cross-projection entre nouvelle boîte et existantes
+        for bx, by, bz, bL, bl, bH in self.boites[:n_avant]:
+            bxf, byf, bzf = bx + bL, by + bl, bz + bH
+            # x de la nouvelle boîte × y,z de l'existante (et vice-versa)
+            for nx in (cx, xf):
+                for ey in (by, byf):
+                    for ez in (bz, bzf):
+                        self._ajouter_coin(nx, ey, ez)
+            for ny in (cy, yf):
+                for ex in (bx, bxf):
+                    for ez in (bz, bzf):
+                        self._ajouter_coin(ex, ny, ez)
+            for nz in (cz, zf):
+                for ex in (bx, bxf):
+                    for ey in (by, byf):
+                        self._ajouter_coin(ex, ey, nz)
+
+        # Pruning : coins désormais à l'intérieur de la nouvelle boîte
+        self.coins -= {
+            (px, py, pz) for px, py, pz in self.coins
+            if cx + EPS < px < xf - EPS
+            and cy + EPS < py < yf - EPS
+            and cz + EPS < pz < zf - EPS
+        }
 
 
 def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
@@ -75,7 +107,7 @@ def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
         for coin in sorted(w.coins, key=lambda c: (c[2], c[0], c[1])):
             cx, cy, cz = coin
             for rL, rl, rH in item.rotations:
-                if cx + rL <= L_WAG + 1e-4 and cy + rl <= l_WAG + 1e-4 and cz + rH <= H_WAG + 1e-4:
+                if cx + rL <= L_WAG + EPS and cy + rl <= l_WAG + EPS and cz + rH <= H_WAG + EPS:
                     if not w.intersecte((cx, cy, cz, rL, rl, rH)):
                         if w.est_supportee(cx, cx + rL, cy, cy + rl, cz):
                             remaining = VOL_WAG - w.vol_used - rL * rl * rH
@@ -87,7 +119,6 @@ def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
             w.placer(coin, rL, rl, rH)
             return
 
-    # Aucun wagon disponible — ouverture d'un nouveau
     nw = Wagon()
     rL, rl, rH = item.rotations[0]
     nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH))
@@ -98,7 +129,7 @@ def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
 
 if __name__ == "__main__":
     print("=" * 65)
-    print("  D3 ONLINE - CORNER POINTS BEST-FIT LOCAL")
+    print("  D3 ONLINE - EXTREME POINTS BEST-FIT LOCAL")
     print("=" * 65)
 
     marchandises = load_marchandises()
@@ -123,4 +154,4 @@ if __name__ == "__main__":
     nb_wagons = len(wagons)
     volume_perdu = nb_wagons * VOL_WAG - vol_total
 
-    print_results("d=3", "Online Corner-Points Best-Fit Local", nb_wagons, volume_perdu, temps_total)
+    print_results("d=3", "Online Extreme-Points Best-Fit Local", nb_wagons, volume_perdu, temps_total)
