@@ -125,7 +125,14 @@ def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
             return
 
     nw = Wagon()
-    rL, rl, rH = item.rotations[0]
+    chosen = None
+    for rL, rl, rH in item.rotations:
+        if rL <= L_WAG + EPS and rl <= l_WAG + EPS and rH <= H_WAG + EPS:
+            chosen = (rL, rl, rH)
+            break
+    if chosen is None:
+        chosen = item.rotations[0]
+    rL, rl, rH = chosen
     nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH, item.id))
     nw.vol_used = rL * rl * rH
     nw.coins = {(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)}

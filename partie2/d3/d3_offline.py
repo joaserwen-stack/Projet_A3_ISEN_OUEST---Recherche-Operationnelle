@@ -126,7 +126,12 @@ def evaluer_liste(ordre: list, dict_items: dict, record_wagons_actuel: int) -> t
             if len(wagons) + 1 > record_wagons_actuel:
                 return float('inf'), float('inf')
             nw = Wagon()
-            rL, rl, rH = item.rotations[0]
+            chosen = next(
+                ((rL, rl, rH) for rL, rl, rH in item.rotations
+                 if rL <= L_WAG + 1e-4 and rl <= l_WAG + 1e-4 and rH <= H_WAG + 1e-4),
+                item.rotations[0]
+            )
+            rL, rl, rH = chosen
             nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH))
             nw.vol_used = rL * rl * rH
             nw.coins = {(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)}
@@ -204,7 +209,12 @@ def extraire_wagons(ordre: list, dict_items: dict) -> list[list[tuple]]:
                 if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
                     wagons_coins[wi].add(npt)
         else:
-            rL, rl, rH = item.rotations[0]
+            chosen = next(
+                ((rL, rl, rH) for rL, rl, rH in item.rotations
+                 if rL <= L_WAG + 1e-4 and rl <= l_WAG + 1e-4 and rH <= H_WAG + 1e-4),
+                item.rotations[0]
+            )
+            rL, rl, rH = chosen
             wagons_boites.append([(0.0, 0.0, 0.0, rL, rl, rH, oid)])
             wagons_coins.append({(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)})
             wagons_vol.append(rL * rl * rH)
