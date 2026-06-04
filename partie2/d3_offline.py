@@ -1,6 +1,7 @@
 import time
 import random
 import math
+from multiprocessing import Pool, cpu_count
 from utils import load_marchandises, print_results
 
 # ═══════════════════════════════════════════════════════════════════
@@ -8,7 +9,7 @@ from utils import load_marchandises, print_results
 # ═══════════════════════════════════════════════════════════════════
 L_WAG, l_WAG, H_WAG = 11.583, 2.294, 2.569  # Dimensions d'un wagon en mètres
 VOL_WAG = L_WAG * l_WAG * H_WAG
-TEMPS_MAX = 60
+TEMPS_MAX = 300
 TAILLE_POPULATION = 20
 
 # ═══════════════════════════════════════════════════════════════════
@@ -41,35 +42,55 @@ class Wagon:
         return False
 
 # ═══════════════════════════════════════════════════════════════════
-# PHASE 2 : ÉVALUATION GÉOMÉTRIQUE (MOTEUR EXACT V1.5)
+# MULTIPROCESSING : WORKER (module-level pour pickling)
+# ═══════════════════════════════════════════════════════════════════
+_pool_dict_items = None
+
+def _init_pool(di):
+    global _pool_dict_items
+    _pool_dict_items = di
+
+def _eval_wrapper(args):
+    individu, record = args
+    return evaluer_liste(individu, _pool_dict_items, record)
+
+# ═══════════════════════════════════════════════════════════════════
+# PHASE 2 : ÉVALUATION GÉOMÉTRIQUE (BEST-FIT V2.0)
 # ═══════════════════════════════════════════════════════════════════
 def evaluer_liste(ordre, dict_items, record_wagons_actuel):
     wagons = []
 
     for oid in ordre:
         item = dict_items[oid]
-        place = False
+        best = None  # (remaining_vol, wagon_idx, coin, rot_tuple)
 
-        for w in wagons:
+        for wi, w in enumerate(wagons):
+            vol_used = sum(b[3] * b[4] * b[5] for b in w.boites)
+            placed_in_wagon = False
             for coin in sorted(w.coins, key=lambda c: (c[2], c[1], c[0])):
+                if placed_in_wagon:
+                    break
                 cx, cy, cz = coin
                 for rL, rl, rH in item.rotations:
                     if cx + rL <= L_WAG + 1e-4 and cy + rl <= l_WAG + 1e-4 and cz + rH <= H_WAG + 1e-4:
-                        boite_cand = (cx, cy, cz, rL, rl, rH)
-                        if not w.intersecte(boite_cand):
-                            w.boites.append(boite_cand)
-                            w.coins.discard(coin)
-
-                            for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
-                                if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
-                                    w.coins.add(npt)
-                            place = True
+                        if not w.intersecte((cx, cy, cz, rL, rl, rH)):
+                            remaining = VOL_WAG - vol_used - rL * rl * rH
+                            if best is None or remaining < best[0]:
+                                best = (remaining, wi, coin, (rL, rl, rH))
+                            placed_in_wagon = True
                             break
-                if place: break
-            if place: break
 
-        if not place:
-            # EARLY EXIT : Identique à la V1.5
+        if best is not None:
+            _, wi, coin, (rL, rl, rH) = best
+            w = wagons[wi]
+            cx, cy, cz = coin
+            w.boites.append((cx, cy, cz, rL, rl, rH))
+            w.coins.discard(coin)
+            for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
+                if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
+                    w.coins.add(npt)
+        else:
+            # EARLY EXIT
             if len(wagons) + 1 > record_wagons_actuel:
                 return float('inf'), float('inf')
 
@@ -89,7 +110,7 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
     return nb_wagons, fitness
 
 # ═══════════════════════════════════════════════════════════════════
-# OPERATEURS GENETIQUES (IDENTIQUES V1.5)
+# OPERATEURS GENETIQUES
 # ═══════════════════════════════════════════════════════════════════
 def croisement_ox(p1, p2):
     n = len(p1)
@@ -117,21 +138,22 @@ def mutation_swap(ordre, prob=0.35):
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 65)
-    print("  D3 OFFLINE - ALGORITHME GÉNÉTIQUE V1.5 (ARCHI. POO)")
+    print("  D3 OFFLINE - ALGORITHME GÉNÉTIQUE V2.0 (Best-Fit + Pool)")
     print("=" * 65)
 
     marchandises = load_marchandises()
     if not marchandises:
         raise SystemExit("Erreur : Impossible de charger les données.")
 
-    # Chargement en tant qu'objets "Marchandise"
     dict_items = {m['id']: Marchandise(m) for m in marchandises}
     ids = list(dict_items.keys())
 
     vol_total = sum(m['longueur'] * m['largeur'] * m['hauteur'] for m in marchandises)
     borne_inf = math.ceil(vol_total / VOL_WAG)
+    n_workers = cpu_count()
     print(f"Chargement : {len(marchandises)} marchandises chargées.")
     print(f"Volume total : {vol_total:.2f} m³ | Borne inférieure théorique : {borne_inf} wagons")
+    print(f"Parallélisation : {n_workers} workers")
 
     # Population initiale : 4 seeds heuristiques + reste aléatoire
     def seed_par(key_fn):
@@ -156,42 +178,39 @@ if __name__ == "__main__":
     meilleur_nb_wagons = float('inf')
     meilleur_fitness = float('inf')
 
-    while time.time() - t_debut < TEMPS_MAX:
-        generation += 1
+    with Pool(processes=n_workers, initializer=_init_pool, initargs=(dict_items,)) as pool:
+        while time.time() - t_debut < TEMPS_MAX:
+            generation += 1
 
-        # Phase 2 : Évaluation classique
-        scores_pop = []
-        for individu in population:
-            nb_w, fitness = evaluer_liste(individu, dict_items, meilleur_nb_wagons)
-            scores_pop.append((nb_w, fitness, individu))
+            args = [(individu, meilleur_nb_wagons) for individu in population]
+            resultats = pool.map(_eval_wrapper, args)
+            scores_pop = [(nb_w, fit, individu) for (nb_w, fit), individu in zip(resultats, population)]
 
-        # Tri et recherche du meilleur
-        scores_pop.sort(key=lambda x: x[1])
-        gen_best_nb, gen_best_fit, _ = scores_pop[0]
+            scores_pop.sort(key=lambda x: x[1])
+            gen_best_nb, gen_best_fit, _ = scores_pop[0]
 
-        if gen_best_fit < meilleur_fitness:
-            meilleur_nb_wagons = gen_best_nb
-            meilleur_fitness = gen_best_fit
-            taux_dernier = (meilleur_fitness - (meilleur_nb_wagons - 1)) * 100
-            print(f"[Gen {generation:03d}] NOUVEAU RECORD : {meilleur_nb_wagons} wagons (Dernier rempli à {taux_dernier:.1f}%) | Temps : {time.time() - t_debut:.2f}s")
+            if gen_best_fit < meilleur_fitness:
+                meilleur_nb_wagons = gen_best_nb
+                meilleur_fitness = gen_best_fit
+                taux_dernier = (meilleur_fitness - (meilleur_nb_wagons - 1)) * 100
+                print(f"[Gen {generation:03d}] NOUVEAU RECORD : {meilleur_nb_wagons} wagons (Dernier rempli à {taux_dernier:.1f}%) | Temps : {time.time() - t_debut:.2f}s")
 
-            if meilleur_nb_wagons <= borne_inf:
-                print(f"\n[STOP] Borne inférieure théorique absolue ({borne_inf}) atteinte !")
-                break
-        elif generation % 50 == 0:
-            print(f"   [Gen {generation:03d}] Recherche en cours... (Temps : {time.time() - t_debut:.2f}s)")
+                if meilleur_nb_wagons <= borne_inf:
+                    print(f"\n[STOP] Borne inférieure théorique absolue ({borne_inf}) atteinte !")
+                    break
+            elif generation % 50 == 0:
+                print(f"   [Gen {generation:03d}] Recherche en cours... (Temps : {time.time() - t_debut:.2f}s)")
 
-        # Phase 3 : Évolution classique
-        top_10 = [indiv for nb, fit, indiv in scores_pop[:10]]
+            top_10 = [indiv for nb, fit, indiv in scores_pop[:10]]
 
-        enfants = []
-        while len(enfants) < 10:
-            p1, p2 = random.sample(top_10, 2)
-            enfant = croisement_ox(p1, p2)
-            enfant = mutation_swap(enfant, prob=0.35)
-            enfants.append(enfant)
+            enfants = []
+            while len(enfants) < 10:
+                p1, p2 = random.sample(top_10, 2)
+                enfant = croisement_ox(p1, p2)
+                enfant = mutation_swap(enfant, prob=0.35)
+                enfants.append(enfant)
 
-        population = top_10 + enfants
+            population = top_10 + enfants
 
     temps_total = time.time() - t_debut
     print("-" * 65)
@@ -199,4 +218,4 @@ if __name__ == "__main__":
     print("-" * 65)
 
     volume_perdu = (meilleur_nb_wagons * VOL_WAG) - vol_total
-    print_results("d=3", "Offline V1.5 (POO Optimisée)", meilleur_nb_wagons, volume_perdu, temps_total)
+    print_results("d=3", "Offline V2.0 (Best-Fit + Pool)", meilleur_nb_wagons, volume_perdu, temps_total)
