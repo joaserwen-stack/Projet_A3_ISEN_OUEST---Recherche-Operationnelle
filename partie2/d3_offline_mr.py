@@ -1,8 +1,8 @@
-"""Bin-Packing 3D Offline — DBLF Normalisé + Algorithme Génétique"""
+"""Bin-Packing 3D Offline — Vrai MaxRects 3D & Deep Fit + Algorithme Génétique"""
 import sys
 import time
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 try:
     sys.path.insert(0, __file__[:__file__.rfind('/')])
@@ -21,10 +21,6 @@ STAG_MAX = 20
 
 _ROT6 = [(0,1,2),(0,2,1),(1,0,2),(1,2,0),(2,0,1),(2,1,0)]
 _ROT2 = [(0,1,2),(1,0,2)]
-
-
-def _overlap(a1: float, a2: float, b1: float, b2: float) -> float:
-    return max(0.0, min(a2, b2) - max(a1, b1))
 
 
 class Item3D:
@@ -69,76 +65,94 @@ class Wagon:
     def vol_free(self) -> float:
         return WVOL - self.vol_used
 
-    def _contact_area(self, x: float, y: float, z: float,
-                      dx: float, dy: float, dz: float) -> float:
-        x2, y2, z2 = x + dx, y + dy, z + dz
-        area = 0.0
-        if x  <= EPS:            area += dy * dz
-        if abs(x2 - WX) <= EPS: area += dy * dz
-        if y  <= EPS:            area += dx * dz
-        if abs(y2 - WY) <= EPS: area += dx * dz
-        if z  <= EPS:            area += dx * dy
-        if abs(z2 - WZ) <= EPS: area += dx * dy
-        for p in self.placed_items:
-            px2, py2, pz2 = p.x+p.dx, p.y+p.dy, p.z+p.dz
-            if abs(x-px2) <= EPS or abs(x2-p.x) <= EPS:
-                area += _overlap(y, y2, p.y, py2) * _overlap(z, z2, p.z, pz2)
-            if abs(y-py2) <= EPS or abs(y2-p.y) <= EPS:
-                area += _overlap(x, x2, p.x, px2) * _overlap(z, z2, p.z, pz2)
-            if abs(z-pz2) <= EPS or abs(z2-p.z) <= EPS:
-                area += _overlap(x, x2, p.x, px2) * _overlap(y, y2, p.y, py2)
-        return area
-
     def place_item(self, item: Item3D) -> bool:
-        best: Optional[tuple] = None
+        """Sélection Deep Fit Pure par tri lexicographique."""
+        best_placement = None  # Stockera (key, sp, dx, dy, dz)
 
         for sp in self.spaces:
             for state in range(item.n_states):
                 dx, dy, dz = item.oriented(state)
                 if dx <= sp.w + EPS and dy <= sp.l + EPS and dz <= sp.h + EPS:
-                    score = (self._contact_area(sp.x, sp.y, sp.z, dx, dy, dz) * 100
-                             + (item.vol / sp.vol) * 50
-                             - (sp.z / WZ) * 1000
-                             - (sp.x / WX) * 100
-                             - (sp.y / WY) * 10)
-                    if best is None or score > best[0]:
-                        best = (score, sp, dx, dy, dz)
+                    # CLÉ DE TRI DEEP FIT : Z d'abord (sol), puis X (fond), puis Y (gauche)
+                    # Tie-break : -sp.vol pour choisir le plus grand espace à coordonnées égales
+                    placement_key = (sp.z, sp.x, sp.y, -sp.vol)
 
-        if best is None:
+                    if best_placement is None or placement_key < best_placement[0]:
+                        best_placement = (placement_key, sp, dx, dy, dz)
+
+        if best_placement is None:
             return False
 
-        _, sp, dx, dy, dz = best
+        _, sp, dx, dy, dz = best_placement
+        # L'objet est placé exactement au coin inférieur-gauche de l'espace sélectionné
         self.placed_items.append(PlacedItem(item, sp.x, sp.y, sp.z, dx, dy, dz))
         self.vol_used += item.vol
-        self._split_spaces(sp.x, sp.y, sp.z, dx, dy, dz)
+
+        # Découpe géométrique MaxRects 3D
+        self._update_spaces(sp.x, sp.y, sp.z, dx, dy, dz)
         return True
 
-    def _split_spaces(self, ix: float, iy: float, iz: float,
-                      iw: float, il: float, ih: float) -> None:
-        keep: List[Space] = []
-        new:  List[Space] = []
-        for sp in self.spaces:
-            if (sp.x+sp.w <= ix+EPS or sp.x >= ix+iw-EPS or
-                    sp.y+sp.l <= iy+EPS or sp.y >= iy+il-EPS or
-                    sp.z+sp.h <= iz+EPS or sp.z >= iz+ih-EPS):
-                keep.append(sp)
-                continue
-            sx, sy, sz, sw, sl, sh = sp.x, sp.y, sp.z, sp.w, sp.l, sp.h
-            if ix+iw < sx+sw-EPS: new.append(Space(ix+iw, sy,    sz,    sx+sw-ix-iw, sl,       sh      ))
-            if sx    < ix-EPS:    new.append(Space(sx,    sy,    sz,    ix-sx,        sl,       sh      ))
-            if iy+il < sy+sl-EPS: new.append(Space(sx,    iy+il, sz,    sw,           sy+sl-iy-il, sh   ))
-            if sy    < iy-EPS:    new.append(Space(sx,    sy,    sz,    sw,           iy-sy,    sh      ))
-            if iz+ih < sz+sh-EPS: new.append(Space(sx,    sy,    iz+ih, sw,           sl,       sz+sh-iz-ih))
-            if sz    < iz-EPS:    new.append(Space(sx,    sy,    sz,    sw,           sl,       iz-sz   ))
-        self.spaces = keep + new
+    def _update_spaces(self, ix: float, iy: float, iz: float,
+                       iw: float, il: float, ih: float) -> None:
+        """Algorithme de division MaxRects 3D exact."""
+        temp_spaces = []
 
+        for sp in self.spaces:
+            # Si l'espace ne chevauche PAS l'item placé, on le garde intact
+            if (sp.x + sp.w <= ix + EPS or sp.x >= ix + iw - EPS or
+                    sp.y + sp.l <= iy + EPS or sp.y >= iy + il - EPS or
+                    sp.z + sp.h <= iz + EPS or sp.z >= iz + ih - EPS):
+                temp_spaces.append(sp)
+                continue
+
+            # Si intersection, on coupe l'espace selon les 6 faces de l'objet placé
+            # Face Gauche (-X)
+            if ix > sp.x + EPS:
+                temp_spaces.append(Space(sp.x, sp.y, sp.z, ix - sp.x, sp.l, sp.h))
+            # Face Droite (+X)
+            if sp.x + sp.w > ix + iw + EPS:
+                temp_spaces.append(Space(ix + iw, sp.y, sp.z, (sp.x + sp.w) - (ix + iw), sp.l, sp.h))
+            # Face Fond (-Y)
+            if iy > sp.y + EPS:
+                temp_spaces.append(Space(sp.x, sp.y, sp.z, sp.w, iy - sp.y, sp.h))
+            # Face Devant (+Y)
+            if sp.y + sp.l > iy + il + EPS:
+                temp_spaces.append(Space(sp.x, iy + il, sp.z, sp.w, (sp.y + sp.l) - (iy + il), sp.h))
+            # Face Dessous (-Z)
+            if iz > sp.z + EPS:
+                temp_spaces.append(Space(sp.x, sp.y, sp.z, sp.w, sp.l, iz - sp.z))
+            # Face Dessus (+Z)
+            if sp.z + sp.h > iz + ih + EPS:
+                temp_spaces.append(Space(sp.x, sp.y, iz + ih, sp.w, sp.l, (sp.z + sp.h) - (iz + ih)))
+
+        # Élimination des espaces dominés (inclus entièrement dans un plus grand)
+        # On trie par volume décroissant pour insérer les plus grands blocs en premier
+        temp_spaces.sort(key=lambda s: -s.vol)
+        final: List[Space] = []
+        for s1 in temp_spaces:
+            if not any(
+                    s1.x >= s2.x - EPS and s1.y >= s2.y - EPS and s1.z >= s2.z - EPS and
+                    s1.x + s1.w <= s2.x + s2.w + EPS and
+                    s1.y + s1.l <= s2.y + s2.l + EPS and
+                    s1.z + s1.h <= s2.z + s2.h + EPS
+                    for s2 in final
+            ):
+                final.append(s1)
+        self.spaces = final
+
+
+# ---------------------------------------------------------------------------
+# Algorithme Génétique (Ordonnancement)
+# ---------------------------------------------------------------------------
 
 def decode_sequence(seq: List[int], items: List[Item3D]) -> List[Wagon]:
     wagons: List[Wagon] = [Wagon()]
     for idx in seq:
         item = items[idx]
         if not any(w.place_item(item) for w in wagons):
-            nw = Wagon(); nw.place_item(item); wagons.append(nw)
+            nw = Wagon()
+            nw.place_item(item)
+            wagons.append(nw)
     return wagons
 
 
@@ -164,14 +178,24 @@ def _evaluate(seq_pop: List[List[int]], items: List[Item3D]):
     return scored
 
 
-def _cataclysm(elite: List[List[int]], heuristics: List[List[int]], n_items: int) -> List[List[int]]:
-    result = [s.copy() for s in elite[:3]]
+def _inject_diversity(scored, n_items: int) -> List[List[int]]:
+    """Injection de diversité : Top-5 intact + hyper-mutation par inversion + immigrants aléatoires."""
+    elite = [s[2] for s in scored[:5]]
+    result = [s.copy() for s in elite]
+
+    # Hyper-mutation par inversion de segments sur des parents de l'élite
+    while len(result) < POP_SIZE // 2:
+        parent = random.choice(elite).copy()
+        a, b   = sorted(random.sample(range(n_items), 2))
+        parent[a:b+1] = list(reversed(parent[a:b+1]))
+        result.append(parent)
+
+    # Immigrants aléatoires : exploration totale de nouvelles zones
+    base = list(range(n_items))
     while len(result) < POP_SIZE:
-        seq = random.choice(heuristics).copy()
-        for _ in range(random.randint(3, 12)):
-            a, b = random.sample(range(n_items), 2)
-            seq[a], seq[b] = seq[b], seq[a]
+        seq = base.copy(); random.shuffle(seq)
         result.append(seq)
+
     return result
 
 
@@ -233,7 +257,7 @@ def main() -> None:
     stag = 0
 
     t0 = time.time()
-    print(f"Bin-Packing 3D Offline  (pop={POP_SIZE}, gen={N_GEN})")
+    print(f"Bin-Packing 3D Offline - True MaxRects & Deep Fit (pop={POP_SIZE}, gen={N_GEN})")
 
     for gen in range(N_GEN):
         scored = _evaluate(pop, items)
@@ -247,8 +271,8 @@ def main() -> None:
             stag += 1
 
         if stag >= STAG_MAX:
-            print(f"  [{gen:3d}] Redémarrage")
-            pop = _cataclysm([s[2] for s in scored], heuristics, n_items)
+            print(f"  [{gen:3d}] Stagnation détectée -> Injection de Diversité (Sang Neuf)")
+            pop = _inject_diversity(scored, n_items)
             stag = 0
         else:
             pop = _next_gen(scored, best_wagons, id_to_idx, n_items)
