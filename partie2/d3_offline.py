@@ -17,6 +17,8 @@ PROB_MUTATION = 0.60
 
 
 class Marchandise:
+    __slots__ = ['id', 'rotations']
+
     def __init__(self, data: dict):
         self.id = data['id']
         L, l, H = data['longueur'], data['largeur'], data['hauteur']
@@ -31,6 +33,8 @@ class Marchandise:
 
 
 class Wagon:
+    __slots__ = ['boites', 'coins', 'vol_used']
+
     def __init__(self):
         self.boites: list[tuple] = []
         self.coins: set[tuple] = {(0.0, 0.0, 0.0)}
