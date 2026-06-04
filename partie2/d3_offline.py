@@ -1,349 +1,251 @@
 import time
 import random
 import math
-from collections import namedtuple
 from multiprocessing import Pool, cpu_count
 from utils import load_marchandises, print_results
 
 # ═══════════════════════════════════════════════════════════════════
-# CONSTANTES
+# CONSTANTES ET CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════
-LONGUEUR_WAG = 11.583   # mètres
-LARGEUR_WAG  = 2.294
-HAUTEUR_WAG  = 2.569
-VOLUME_WAG   = LONGUEUR_WAG * LARGEUR_WAG * HAUTEUR_WAG
-
-TAILLE_POPULATION = 20
-TEMPS_MAX         = 300   # secondes
-SEUIL_CATACLYSME  = 200   # générations sans amélioration → reset
-FREQ_OR_OPT       = 50    # générations entre deux appels Or-opt
-MAX_TEMPS_OR_OPT  = 3.0   # secondes max par appel Or-opt
+L_WAG, l_WAG, H_WAG = 11.583, 2.294, 2.569  # Dimensions d'un wagon en mètres
+VOL_WAG = L_WAG * l_WAG * H_WAG
+TEMPS_MAX = 300
+TAILLE_POPULATION = 40
 
 # ═══════════════════════════════════════════════════════════════════
-# STRUCTURES
+# CLASSES
 # ═══════════════════════════════════════════════════════════════════
-
-# Boite placée dans un wagon : position (x,y,z) + dimensions (lon,larg,haut)
-Boite = namedtuple('Boite', ['x', 'y', 'z', 'lon', 'larg', 'haut'])
-
-# Meilleur placement trouvé pour un item lors du Best-Fit
-PlacementCandidat = namedtuple('PlacementCandidat', ['volume_restant', 'index_wagon', 'coin', 'rotation'])
-
-
 class Marchandise:
     def __init__(self, data):
         self.id = data['id']
         L, l, H = data['longueur'], data['largeur'], data['hauteur']
 
         if data.get('retournable', 1) == 0:
-            rotations_possibles = [(L, l, H), (l, L, H)]
+            rot = [(L, l, H), (l, L, H)]
         else:
-            rotations_possibles = [(L, l, H), (L, H, l), (l, L, H), (l, H, L), (H, L, l), (H, l, L)]
+            rot = [(L, l, H), (L, H, l), (l, L, H), (l, H, L), (H, L, l), (H, l, L)]
 
-        # Tri par hauteur croissante : privilégier la pose à plat
-        self.rotations = sorted(list(set(rotations_possibles)), key=lambda r: r[2])
-
-        # Propriétés pour les seeds heuristiques (basées sur la rotation à plat)
-        rotation_a_plat  = self.rotations[0]
-        self.volume      = L * l * H
-        self.hauteur_min = rotation_a_plat[2]
-        self.aire_base   = rotation_a_plat[0] * rotation_a_plat[1]
-        self.longueur    = rotation_a_plat[0]
-
+        # Trier par hauteur croissante pour tasser au sol en priorité
+        self.rotations = sorted(list(set(rot)), key=lambda r: r[2])
 
 class Wagon:
     def __init__(self):
         self.boites = []
-        self.coins  = {(0.0, 0.0, 0.0)}
+        self.vol_used = 0.0  # volume occupé cumulé — mis à jour à chaque placement
+        self.coins = {(0.0, 0.0, 0.0)}
 
-    @property
-    def volume_utilise(self):
-        return sum(b.lon * b.larg * b.haut for b in self.boites)
-
-    def intersecte(self, c):
-        """Retourne True si la boite candidate c chevauche une boite existante."""
-        for b in self.boites:
-            if (c.x < b.x + b.lon - 1e-4 and c.x + c.lon > b.x + 1e-4 and
-                    c.y < b.y + b.larg - 1e-4 and c.y + c.larg > b.y + 1e-4 and
-                    c.z < b.z + b.haut - 1e-4 and c.z + c.haut > b.z + 1e-4):
+    def intersecte(self, b1):
+        for b2 in self.boites:
+            if (b1[0] < b2[0] + b2[3] - 1e-4 and b1[0] + b1[3] > b2[0] + 1e-4 and
+                    b1[1] < b2[1] + b2[4] - 1e-4 and b1[1] + b1[4] > b2[1] + 1e-4 and
+                    b1[2] < b2[2] + b2[5] - 1e-4 and b1[2] + b1[5] > b2[2] + 1e-4):
                 return True
         return False
 
-# ═══════════════════════════════════════════════════════════════════
-# MULTIPROCESSING : workers au niveau module (requis pour pickle)
-# ═══════════════════════════════════════════════════════════════════
-_items_worker = None
-
-def _init_worker(items):
-    global _items_worker
-    _items_worker = items
-
-def _worker(args):
-    ordre, record = args
-    return evaluer(ordre, _items_worker, record)
 
 # ═══════════════════════════════════════════════════════════════════
-# ÉVALUATION : permutation d'IDs → (nb_wagons, fitness)
-#
-# Placement par DBLF + Best-Fit :
-#   DBLF (Deepest Bottom-Left Fill) : tri des coins candidats par
-#     (x, z, y) → remplit de l'avant vers l'arrière, puis plancher,
-#     puis Y — adapté aux wagons longs
-#   Best-Fit : parmi les wagons pouvant accueillir l'item, choisit
-#     celui avec le moins de volume résiduel → minimise les vides
+# MULTIPROCESSING : workers déclarés au niveau module pour pickling
 # ═══════════════════════════════════════════════════════════════════
-def evaluer(ordre, items, record):
+_pool_dict_items = None
+
+def _init_pool(di):
+    global _pool_dict_items
+    _pool_dict_items = di
+
+def _eval_wrapper(args):
+    individu, record = args
+    return evaluer_liste(individu, _pool_dict_items, record)
+
+# ═══════════════════════════════════════════════════════════════════
+# ÉVALUATION GÉOMÉTRIQUE
+# Décodeur : permutation d'IDs → nb wagons + fitness
+# Placement : DBLF (Deepest Bottom-Left Fill) + Best-Fit wagon
+#   - DBLF      : tri coins par (x, z, y) → remplit avant→arrière, plancher d'abord
+#   - Best-Fit  : choisit le wagon avec le moins de volume résiduel
+#   - Early exit: si nb wagons dépasse le record → return inf (évite calculs inutiles)
+# ═══════════════════════════════════════════════════════════════════
+def evaluer_liste(ordre, dict_items, record_wagons_actuel):
     wagons = []
 
-    for identifiant in ordre:
-        item = items[identifiant]
-        meilleur = None  # PlacementCandidat
+    for oid in ordre:
+        item = dict_items[oid]
+        best = None  # (remaining_vol, wagon_idx, coin, rot_tuple)
 
-        for index_wagon, wagon in enumerate(wagons):
-            coins_tries = sorted(wagon.coins, key=lambda c: (c[0], c[2], c[1]))  # DBLF
-            placement_trouve = False
-
-            for coin in coins_tries:
-                if placement_trouve:
+        for wi, w in enumerate(wagons):
+            found = False
+            for coin in sorted(w.coins, key=lambda c: (c[0], c[2], c[1])):  # DBLF
+                if found:
                     break
                 cx, cy, cz = coin
-
-                for lon, larg, haut in item.rotations:
-                    if cx + lon <= LONGUEUR_WAG + 1e-4 and cy + larg <= LARGEUR_WAG + 1e-4 and cz + haut <= HAUTEUR_WAG + 1e-4:
-                        candidate = Boite(cx, cy, cz, lon, larg, haut)
-                        if not wagon.intersecte(candidate):
-                            volume_restant = VOLUME_WAG - wagon.volume_utilise - lon * larg * haut
-                            if meilleur is None or volume_restant < meilleur.volume_restant:
-                                meilleur = PlacementCandidat(volume_restant, index_wagon, coin, (lon, larg, haut))
-                            placement_trouve = True
+                for rL, rl, rH in item.rotations:
+                    if cx + rL <= L_WAG + 1e-4 and cy + rl <= l_WAG + 1e-4 and cz + rH <= H_WAG + 1e-4:
+                        if not w.intersecte((cx, cy, cz, rL, rl, rH)):
+                            remaining = VOL_WAG - w.vol_used - rL * rl * rH
+                            if best is None or remaining < best[0]:
+                                best = (remaining, wi, coin, (rL, rl, rH))
+                            found = True
                             break
 
-        if meilleur is not None:
-            wagon = wagons[meilleur.index_wagon]
-            cx, cy, cz = meilleur.coin
-            lon, larg, haut = meilleur.rotation
-            boite = Boite(cx, cy, cz, lon, larg, haut)
-            wagon.boites.append(boite)
-            wagon.coins.discard(meilleur.coin)
-            for nouveau_coin in [(cx + lon, cy, cz), (cx, cy + larg, cz), (cx, cy, cz + haut)]:
-                if nouveau_coin[0] <= LONGUEUR_WAG and nouveau_coin[1] <= LARGEUR_WAG and nouveau_coin[2] <= HAUTEUR_WAG:
-                    wagon.coins.add(nouveau_coin)
+        if best is not None:
+            _, wi, coin, (rL, rl, rH) = best
+            w = wagons[wi]
+            cx, cy, cz = coin
+            w.boites.append((cx, cy, cz, rL, rl, rH))
+            w.vol_used += rL * rl * rH
+            w.coins.discard(coin)
+            for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
+                if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
+                    w.coins.add(npt)
         else:
-            # Early exit : inutile de dépasser le record actuel
-            if len(wagons) + 1 > record:
+            if len(wagons) + 1 > record_wagons_actuel:
                 return float('inf'), float('inf')
-            nouveau_wagon = Wagon()
-            lon, larg, haut = item.rotations[0]
-            nouveau_wagon.boites.append(Boite(0.0, 0.0, 0.0, lon, larg, haut))
-            nouveau_wagon.coins = {(lon, 0.0, 0.0), (0.0, larg, 0.0), (0.0, 0.0, haut)}
-            wagons.append(nouveau_wagon)
+
+            nw = Wagon()
+            rL, rl, rH = item.rotations[0]
+            nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH))
+            nw.vol_used = rL * rl * rH
+            nw.coins = {(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)}
+            wagons.append(nw)
 
     nb_wagons = len(wagons)
-    if nb_wagons == 0:
-        return float('inf'), float('inf')
-
-    volume_dernier = wagons[-1].volume_utilise
-    fitness = (nb_wagons - 1) + (volume_dernier / VOLUME_WAG)
+    fitness = (nb_wagons - 1) + (wagons[-1].vol_used / VOL_WAG)
     return nb_wagons, fitness
-
-# ═══════════════════════════════════════════════════════════════════
-# RECHERCHE LOCALE : Or-opt-1 (composante mémétique)
-# Pour chaque item, teste toutes les positions de réinsertion et
-# applique la première amélioration trouvée (first-improvement).
-# Une seule passe sur les items, budget temps limité.
-# ═══════════════════════════════════════════════════════════════════
-def recherche_locale(ordre, items, record):
-    ordre_actuel  = ordre[:]
-    _, fitness_actuelle = evaluer(ordre_actuel, items, record)
-    t_debut = time.time()
-
-    for i in range(len(ordre_actuel)):
-        if time.time() - t_debut > MAX_TEMPS_OR_OPT:
-            break
-        item_deplace = ordre_actuel[i]
-        ordre_sans   = ordre_actuel[:i] + ordre_actuel[i+1:]
-
-        for j in range(len(ordre_sans) + 1):
-            if j == i:
-                continue
-            ordre_teste = ordre_sans[:j] + [item_deplace] + ordre_sans[j:]
-            _, fitness_teste = evaluer(ordre_teste, items, record)
-            if fitness_teste < fitness_actuelle:
-                ordre_actuel   = ordre_teste
-                fitness_actuelle = fitness_teste
-                break  # first-improvement : passer à l'item suivant
-
-    return ordre_actuel, fitness_actuelle
 
 # ═══════════════════════════════════════════════════════════════════
 # OPÉRATEURS GÉNÉTIQUES
 # ═══════════════════════════════════════════════════════════════════
-def croisement(parent1, parent2):
-    """Order Crossover (OX) : copie un segment de parent1, complète avec parent2."""
-    n = len(parent1)
-    debut, fin = sorted(random.sample(range(n), 2))
+def croisement_ox(p1, p2):
+    """Order Crossover (OX) : préserve les sous-séquences relatives."""
+    n = len(p1)
+    a, b = sorted(random.sample(range(n), 2))
     enfant = [None] * n
-    enfant[debut:fin+1] = parent1[debut:fin+1]
-    deja_copie = set(enfant[debut:fin+1])
+    enfant[a:b+1] = p1[a:b+1]
+    pris = set(enfant[a:b+1])
 
-    position = (fin + 1) % n
+    pos = (b + 1) % n
     for i in range(n):
-        gene = parent2[(fin + 1 + i) % n]
-        if gene not in deja_copie:
-            enfant[position] = gene
-            position = (position + 1) % n
+        curr = p2[(b + 1 + i) % n]
+        if curr not in pris:
+            enfant[pos] = curr
+            pos = (pos + 1) % n
     return enfant
-
 
 def mutation(ordre, prob=0.35):
     """3 opérateurs au choix uniforme : swap, insertion, 2-opt (reverse segment)."""
     if random.random() >= prob:
         return ordre
-    operateur = random.randint(0, 2)
-    if operateur == 0:  # swap : échange deux positions
+    op = random.randint(0, 2)
+    if op == 0:  # swap
         i, j = random.sample(range(len(ordre)), 2)
         ordre[i], ordre[j] = ordre[j], ordre[i]
-    elif operateur == 1:  # insertion : déplace un item vers une autre position
+    elif op == 1:  # insertion : déplace 1 item vers une autre position
         i = random.randrange(len(ordre))
         item = ordre.pop(i)
         j = random.randrange(len(ordre) + 1)
         ordre.insert(j, item)
-    else:  # 2-opt : inverse un segment
+    else:  # 2-opt : inverse un segment aléatoire
         i, j = sorted(random.sample(range(len(ordre)), 2))
         ordre[i:j+1] = ordre[i:j+1][::-1]
     return ordre
 
 # ═══════════════════════════════════════════════════════════════════
-# INITIALISATION : population avec seeds heuristiques
-# ═══════════════════════════════════════════════════════════════════
-def creer_population(ids, items, taille):
-    """4 seeds triés par critère heuristique + reste aléatoire."""
-    seeds = [
-        sorted(ids, key=lambda i: items[i].volume,      reverse=True),
-        sorted(ids, key=lambda i: items[i].hauteur_min, reverse=True),
-        sorted(ids, key=lambda i: items[i].aire_base,   reverse=True),
-        sorted(ids, key=lambda i: items[i].longueur,    reverse=True),
-    ]
-    population = seeds[:]
-    while len(population) < taille:
-        individu = list(ids)
-        random.shuffle(individu)
-        population.append(individu)
-    return population, len(seeds)
-
-# ═══════════════════════════════════════════════════════════════════
 # EXÉCUTION PRINCIPALE
-# Architecture : GA Mémétique V4.0
-#   Population  → 4 seeds heuristiques + 16 aléatoires
-#   Sélection   → élitisme top-10
-#   Croisement  → OX (Order Crossover)
-#   Mutation    → 3 opérateurs (swap / insertion / 2-opt), taux adaptatif
-#                 stagnation 0–50 gens → 0.35 | 50–100 → 0.50 | 100+ → 0.65
-#   Or-opt-1    → recherche locale first-improvement toutes les FREQ_OR_OPT gens
-#   Cataclysme  → reset (sauf top-2) après SEUIL_CATACLYSME gens sans record
-#   Pool        → évaluations parallèles sur cpu_count() workers
+# Architecture : GA V4.5 — épuré
+#   - Population  : 4 seeds heuristiques + 36 aléatoires (40 total)
+#   - Sélection   : top-2 élitiste (survivants) ; parents tirés du top-20
+#   - Croisement  : OX sur permutations
+#   - Mutation    : 3 opérateurs (swap / insertion / 2-opt), prob fixe 0.60
+#   - Pool        : évaluations parallèles sur cpu_count() workers
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 65)
-    print("  D3 OFFLINE - GA MÉMÉTIQUE V4.0 (Or-opt + Multi-mut + Adapt)")
+    print("  D3 OFFLINE - GA V4.5 (épuré, mut 0.60)")
     print("=" * 65)
 
     marchandises = load_marchandises()
     if not marchandises:
         raise SystemExit("Erreur : Impossible de charger les données.")
 
-    items = {m['id']: Marchandise(m) for m in marchandises}
-    ids   = list(items.keys())
+    dict_items = {m['id']: Marchandise(m) for m in marchandises}
+    ids = list(dict_items.keys())
 
-    volume_total = sum(m['longueur'] * m['largeur'] * m['hauteur'] for m in marchandises)
-    borne_inf    = math.ceil(volume_total / VOLUME_WAG)
-    nb_workers   = cpu_count()
-
+    vol_total = sum(m['longueur'] * m['largeur'] * m['hauteur'] for m in marchandises)
+    borne_inf = math.ceil(vol_total / VOL_WAG)
+    n_workers = cpu_count()
     print(f"Chargement : {len(marchandises)} marchandises chargées.")
-    print(f"Volume total : {volume_total:.2f} m³ | Borne inférieure théorique : {borne_inf} wagons")
-    print(f"Parallélisation : {nb_workers} workers")
+    print(f"Volume total : {vol_total:.2f} m³ | Borne inférieure théorique : {borne_inf} wagons")
+    print(f"Parallélisation : {n_workers} workers")
 
-    population, nb_seeds = creer_population(ids, items, TAILLE_POPULATION)
-    print(f"Population de départ : {nb_seeds} seeds heuristiques + {TAILLE_POPULATION - nb_seeds} aléatoires.")
+    def seed_par(key_fn):
+        return sorted(ids, key=lambda i: key_fn(dict_items[i].rotations[0]), reverse=True)
+
+    seeds = [
+        seed_par(lambda r: r[0] * r[1] * r[2]),   # volume desc
+        seed_par(lambda r: r[2]),                   # hauteur desc
+        seed_par(lambda r: r[0] * r[1]),            # aire base desc
+        seed_par(lambda r: r[0]),                   # longueur desc
+    ]
+    population = seeds[:]
+    while len(population) < TAILLE_POPULATION:
+        indiv = list(ids)
+        random.shuffle(indiv)
+        population.append(indiv)
+    print(f"Population de départ : {len(seeds)} seeds heuristiques + {TAILLE_POPULATION - len(seeds)} aléatoires.")
+
+    # Pre-warm : évalue le meilleur seed pour avoir un record dès le départ
+    # → active l'early-exit dès la gen 1 (évite d'explorer sans borne)
+    nb_init, fit_init = evaluer_liste(seeds[0], dict_items, float('inf'))
+    meilleur_nb_wagons = nb_init
+    meilleur_fitness = fit_init
+    meilleur_individu = seeds[0][:]
+    print(f"[Init] Seed volume-desc → {nb_init} wagons (fitness {fit_init:.4f})")
     print("-" * 65)
 
-    t_debut              = time.time()
-    generation           = 0
-    meilleur_nb_wagons   = float('inf')
-    meilleure_fitness    = float('inf')
-    gens_sans_record     = 0
+    t_debut = time.time()
+    generation = 0
 
-    with Pool(processes=nb_workers, initializer=_init_worker, initargs=(items,)) as pool:
+    with Pool(processes=n_workers, initializer=_init_pool, initargs=(dict_items,)) as pool:
         while time.time() - t_debut < TEMPS_MAX:
             generation += 1
 
-            # Évaluation parallèle de toute la population
-            resultats  = pool.map(_worker, [(ind, meilleur_nb_wagons) for ind in population])
-            scores_pop = sorted(
-                [(nb, fit, ind) for (nb, fit), ind in zip(resultats, population)],
-                key=lambda x: x[1]
-            )
-            nb_best, fit_best, ind_best = scores_pop[0]
+            # 1. Évaluation parallèle
+            args = [(individu, meilleur_nb_wagons) for individu in population]
+            resultats = pool.map(_eval_wrapper, args)
+            scores_pop = [(nb_w, fit, individu) for (nb_w, fit), individu in zip(resultats, population)]
+            scores_pop.sort(key=lambda x: x[1])
+            gen_best_nb, gen_best_fit, gen_best_ind = scores_pop[0]
 
-            # Or-opt : recherche locale sur le meilleur individu
-            if generation % FREQ_OR_OPT == 0:
-                ind_ameliore, fit_ameliore = recherche_locale(ind_best, items, meilleur_nb_wagons)
-                if fit_ameliore < fit_best:
-                    nb_best, fit_best, ind_best = evaluer(ind_ameliore, items, meilleur_nb_wagons) + (ind_ameliore,)
-                    scores_pop[0] = (nb_best, fit_best, ind_best)
-                    print(f"   [Gen {generation:04d}] Or-opt amélioration → fitness {fit_best:.4f}")
-
-            # Mise à jour du record global
-            if fit_best < meilleure_fitness:
-                meilleur_nb_wagons = nb_best
-                meilleure_fitness  = fit_best
-                gens_sans_record   = 0
-                taux_dernier = (meilleure_fitness - (meilleur_nb_wagons - 1)) * 100
+            # 2. Mise à jour du meilleur record global
+            if gen_best_fit < meilleur_fitness:
+                meilleur_nb_wagons = gen_best_nb
+                meilleur_fitness = gen_best_fit
+                meilleur_individu = gen_best_ind[:]
+                taux_dernier = (meilleur_fitness - (meilleur_nb_wagons - 1)) * 100
                 print(f"[Gen {generation:04d}] NOUVEAU RECORD : {meilleur_nb_wagons} wagons "
                       f"(Dernier rempli à {taux_dernier:.1f}%) | Temps : {time.time() - t_debut:.2f}s")
                 if meilleur_nb_wagons <= borne_inf:
-                    print(f"\n[STOP] Borne inférieure ({borne_inf}) atteinte !")
+                    print(f"\n[STOP] Borne inférieure théorique absolue ({borne_inf}) atteinte !")
                     break
-            else:
-                gens_sans_record += 1
-                if generation % 50 == 0:
-                    print(f"   [Gen {generation:04d}] Recherche... "
-                          f"(stagnation : {gens_sans_record} gens | Temps : {time.time() - t_debut:.2f}s)")
 
-            # Cataclysme : stagnation prolongée → reset sauf top-2
-            if gens_sans_record >= SEUIL_CATACLYSME:
-                top_2      = [ind for _, _, ind in scores_pop[:2]]
-                population = top_2[:]
-                while len(population) < TAILLE_POPULATION:
-                    individu = list(ids)
-                    random.shuffle(individu)
-                    population.append(individu)
-                gens_sans_record = 0
-                print(f"   [Gen {generation:04d}] *** CATACLYSME *** top-2 conservé, reste réinitialisé")
-                continue
+            if generation % 50 == 0:
+                print(f"   [Gen {generation:04d}] Recherche en cours... | Temps : {time.time() - t_debut:.2f}s")
 
-            # Taux de mutation adaptatif selon la stagnation
-            if gens_sans_record < 50:
-                taux_mutation = 0.35
-            elif gens_sans_record < 100:
-                taux_mutation = 0.50
-            else:
-                taux_mutation = 0.65
-
-            # Évolution : top-10 survivent, 10 enfants générés
-            top_10  = [ind for _, _, ind in scores_pop[:10]]
+            # 3. Sélection + reproduction
+            top_2  = [indiv for _, _, indiv in scores_pop[:2]]
+            top_20 = [indiv for _, _, indiv in scores_pop[:20]]
             enfants = []
-            while len(enfants) < 10:
-                p1, p2  = random.sample(top_10, 2)
-                enfant  = croisement(p1, p2)
-                enfant  = mutation(enfant, prob=taux_mutation)
+            for _ in range(38):
+                p1, p2 = random.sample(top_20, 2)
+                enfant = croisement_ox(p1, p2)
+                enfant = mutation(enfant, prob=0.60)
                 enfants.append(enfant)
 
-            population = top_10 + enfants
+            population = top_2 + enfants
 
-    temps_total   = time.time() - t_debut
-    volume_perdu  = (meilleur_nb_wagons * VOLUME_WAG) - volume_total
+    temps_total = time.time() - t_debut
     print("-" * 65)
     print("  FIN DU CHRONO DE CALCUL")
     print("-" * 65)
-    print_results("d=3", "Offline V4.0 (GA Mémétique)", meilleur_nb_wagons, volume_perdu, temps_total)
+
+    volume_perdu = (meilleur_nb_wagons * VOL_WAG) - vol_total
+    print_results("d=3", "Offline V4.5 (GA)", meilleur_nb_wagons, volume_perdu, temps_total)
