@@ -4,18 +4,19 @@ from utils import load_marchandises, print_results
 def obtenir_rotations_valides(item, LONGUEUR_MAX, LARGEUR_MAX, HAUTEUR_MAX):
     """Génère et trie les 6 orientations physiques possibles (Flattest Z first)."""
     L, l, h = item['longueur'], item['largeur'], item['hauteur']
-    toutes_les_rotations = [
-        (L, l, h), (L, h, l), (l, L, h),
+    toutes_les_rotations = [ # Toutes les permutations possibles des dimensions
+        (L, l, h), (L, h, l), (l, L, h), 
         (l, h, L), (h, L, l), (h, l, L)
     ]
-    rotations_valides = []
-    for rx, ry, rz in toutes_les_rotations:
-        if rx <= LONGUEUR_MAX and ry <= LARGEUR_MAX and rz <= HAUTEUR_MAX:
+    rotations_valides = [] # Filtrage des rotations qui dépassent les dimensions du wagon
+    for rx, ry, rz in toutes_les_rotations: # Vérification stricte des limites du wagon
+        if rx <= LONGUEUR_MAX and ry <= LARGEUR_MAX and rz <= HAUTEUR_MAX: # Uniquement les rotations qui rentrent dans le wagon
             if (rx, ry, rz) not in rotations_valides:
                 rotations_valides.append((rx, ry, rz))
     rotations_valides.sort(key=lambda x: (x[2], x[1], x[0]))
     return rotations_valides
 
+# AABB 3D : Axis-Aligned Bounding Box pour la détection de collision rapide
 def intersect_3d(b1, b2):
     """Détection de collision géométrique standard (AABB)."""
     return not (
@@ -69,7 +70,6 @@ def true_online_3d_corner_points_speed(marchandises, LONGUEUR_MAX, LARGEUR_MAX, 
                         }
                         wagon['objets'].append(nouvel_obj)
                         
-                        # 🌟 MISE À JOUR INCRÉMENTALE DES CORNER POINTS (O(1)) 🌟
                         # 1. Le point utilisé est consommé, on le retire
                         wagon['candidates'].remove((cx, cy, cz))
                         

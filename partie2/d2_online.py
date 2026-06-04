@@ -123,13 +123,13 @@ def mettre_a_jour_espaces(wagon, obj_x, obj_y, obj_longueur, obj_largeur):
     bord_haut_obj  = obj_y + obj_largeur
 
     # On examine chaque espace libre existant du wagon
-    for espace_x, espace_y, espace_largeur, espace_hauteur in wagon['espaces_libres']:
-        bord_droit_espace = espace_x + espace_largeur
-        bord_haut_espace  = espace_y + espace_hauteur
+    for espace_x, espace_y, espace_largeur, espace_hauteur in wagon['espaces_libres']: 
+        bord_droit_espace = espace_x + espace_largeur # Coordonnées des bords droit et haut de l'espace libre
+        bord_haut_espace  = espace_y + espace_hauteur 
 
         # Si l'objet ne touche pas cet espace, on le conserve tel quel
-        if (obj_x >= bord_droit_espace - EPS or bord_droit_obj <= espace_x + EPS or
-                obj_y >= bord_haut_espace - EPS or bord_haut_obj <= espace_y + EPS):
+        if (obj_x >= bord_droit_espace - EPS or bord_droit_obj <= espace_x + EPS or # L'objet est complètement à gauche ou à droite de l'espace
+                obj_y >= bord_haut_espace - EPS or bord_haut_obj <= espace_y + EPS): # L'objet est complètement en dessous ou au-dessus de l'espace
             nouveaux_espaces.append((espace_x, espace_y, espace_largeur, espace_hauteur))
             continue
 
