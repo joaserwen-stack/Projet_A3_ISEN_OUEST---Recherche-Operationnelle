@@ -67,7 +67,7 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
         for wi, w in enumerate(wagons):
             vol_used = sum(b[3] * b[4] * b[5] for b in w.boites)
             placed_in_wagon = False
-            for coin in sorted(w.coins, key=lambda c: (c[2], c[1], c[0])):
+            for coin in sorted(w.coins, key=lambda c: (c[0], c[2], c[1])):
                 if placed_in_wagon:
                     break
                 cx, cy, cz = coin
