@@ -1,27 +1,32 @@
 import time
 from utils import load_marchandises, print_results
 
+# =====================================================================
+# Écrit par : Thomas
+# =====================================================================
+
+# Longueur maximale utile d'un wagon standard en mètres
 WAGON_MAX_LENGTH = 11.583
 
 def first_fit_decreasing(marchandises):
-    # Tri des marchandises par ordre décroissant de longueur
+    # Tri préalable des marchandises de la plus grande à la plus petite longueur (principe du mode Offline)
     marchandises_triees = sorted(marchandises, key=lambda x: x['longueur'], reverse=True)
-    wagons = []
-    wagons_content = []
+    wagons = [] # Stocke l'espace linéaire restant dans chaque wagon ouvert
+    wagons_content = [] # Stocke la liste des objets placés dans chaque wagon
 
-    # Rangement des marchandises une par une
+    # Rangement séquentiel des marchandises triées
     for item in marchandises_triees:
         placed = False
 
-        # On parcourt les wagons existants pour trouver le premier qui a assez de place
+        # On cherche le tout premier wagon ouvert possédant assez d'espace libre
         for i in range(len(wagons)):
             if wagons[i] >= item['longueur']:
-                wagons[i] -= item['longueur']  # On met à jour l'espace restant
-                wagons_content[i].append(item) # On ajoute l'objet au wagon
+                wagons[i] -= item['longueur']  # Déduction de la longueur de la marchandise
+                wagons_content[i].append(item)
                 placed = True
                 break
 
-        # Si aucun wagon n'a assez de place, on en ouvre un nouveau
+        # Si l'objet ne rentre nulle part, on ouvre un nouveau wagon configuré avec l'espace restant
         if not placed:
             wagons.append(WAGON_MAX_LENGTH - item['longueur'])
             wagons_content.append([item])
@@ -29,30 +34,33 @@ def first_fit_decreasing(marchandises):
     return wagons, wagons_content
 
 def best_fit_decreasing(marchandises):
-    # Tri des marchandises par ordre décroissant de longueur
+    # Tri préalable des marchandises par ordre décroissant de longueur
     marchandises_triees = sorted(marchandises, key=lambda x: x['longueur'], reverse=True)
     wagons = []
     wagons_content = []
 
     for item in marchandises_triees:
         best_idx = -1
-        min_remaining_space = WAGON_MAX_LENGTH + 1  # Initialisé à une valeur max impossible
+        # Initialisation avec une valeur théorique maximale pour la recherche de l'espace minimal restant
+        min_remaining_space = WAGON_MAX_LENGTH + 1
 
-        # On parcourt tous les wagons pour trouver celui qui laissera le moins d'espace vide
+        # Best-fit
+        # On parcourt tous les wagons ouverts pour trouver celui qui minimisera le vide résiduel après placement
         for i in range(len(wagons)):
             if wagons[i] >= item['longueur']:
                 remaining_space_after = wagons[i] - item['longueur']
+                # On mémorise l'index du wagon si le trou restant après insertion est le plus petit trouvé
                 if remaining_space_after < min_remaining_space:
                     min_remaining_space = remaining_space_after
                     best_idx = i
 
-        # Si on a trouvé un wagon optimal, on place la marchandise dedans
+        # Si un wagon optimal a été identifié, on valide le placement dedans
         if best_idx != -1:
-            wagons[best_idx] -= item['longueur'] # On met à jour l'espace restant
-            wagons_content[best_idx].append(item) # On ajoute l'objet au wagon
+            wagons[best_idx] -= item['longueur']
+            wagons_content[best_idx].append(item)
         else:
-            # Sinon on ouvre un nouveau wagon
-            wagons.append(WAGON_MAX_LENGTH - item['longueur']) # On ajoute un nouveau wagon avec l'espace restant après y avoir placé la marchandise
+            # Sinon, ouverture d'un nouveau wagon
+            wagons.append(WAGON_MAX_LENGTH - item['longueur'])
             wagons_content.append([item])
 
     return wagons, wagons_content
@@ -64,6 +72,7 @@ if __name__ == "__main__":
     print(f"Nombre de marchandises chargées : {len(items)}")
 
     if items:
+        # --- Évaluation des performances du First-Fit Decreasing ---
         start_time = time.time()
         remains, content = first_fit_decreasing(items)
         temps = time.time() - start_time
@@ -81,6 +90,7 @@ if __name__ == "__main__":
 
 
         print("\n\nd=1 Offline Best-fit")
+        # --- Évaluation des performances du Best-Fit Decreasing ---
         start_time = time.time()
         remains_bf, content_bf = best_fit_decreasing(items)
         temps = time.time() - start_time
