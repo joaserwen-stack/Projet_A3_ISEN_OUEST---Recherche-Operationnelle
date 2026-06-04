@@ -1,10 +1,10 @@
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import time
 import math
 from utils import load_marchandises, print_results, WAGON_L, WAGON_l
+
+# =====================================================================
+# Écrit par : Joas
+# =====================================================================
 
 LONGUEUR_WAGON = WAGON_L
 LARGEUR_WAGON = WAGON_l

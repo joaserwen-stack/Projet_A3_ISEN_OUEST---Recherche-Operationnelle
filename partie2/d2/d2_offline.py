@@ -2,6 +2,10 @@ import time
 import math
 from utils import load_marchandises, print_results, WAGON_L, WAGON_l
 
+# =====================================================================
+# Écrit par : Thomas
+# =====================================================================
+
 LONGUEUR_WAGON = WAGON_L
 LARGEUR_WAGON = WAGON_l
 EPS = 1e-9

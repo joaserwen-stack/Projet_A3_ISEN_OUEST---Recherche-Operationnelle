@@ -1,6 +1,10 @@
 import time
 from utils import load_marchandises, print_results
 
+# =====================================================================
+# Écrit par : Thomas
+# =====================================================================
+
 # Longueur maximale utile d'un wagon standard en mètres
 WAGON_MAX_LENGTH = 11.583
 
