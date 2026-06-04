@@ -1,36 +1,39 @@
 import time
 from data.objets import objets
 
-# Joas
+# =====================================================================
+# Écrit par : Joas
+# =====================================================================
 
 def sac_a_dos_exact(capacite_max):
     n = len(objets)
     meilleure_utilite = 0
     meilleur_sac = []
 
-    # Étape 1 : Calculer le nombre total de combinaisons (2 puissance n)
+    # Calcul du nombre total de combinaisons possibles (2 puissance n)
     total_combinaisons = 2 ** n
 
-    # Étape 2 : Boucler sur tous les nombres possibles
+    # Boucle d'exploration complète de l'espace des solutions
     for i in range(total_combinaisons):
 
-        # On convertit notre nombre 'i' en texte binaire (ex: '01011')
-        # [2:] permet d'enlever le '0b' que Python rajoute toujours devant.
-        # zfill(n) permet de rajouter des zéros devant pour avoir exactement 'n' caractères.
+        # Conversion de l'entier en sa représentation binaire textuelle (ex: '01011')
+        # Le slice [2:] retire le préfixe '0b' généré par Python
+        # zfill(n) comble avec des zéros à gauche pour s'assurer d'avoir un bit par objet
         combinaison_binaire = bin(i)[2:].zfill(n)
 
         masse_courante = 0
         utilite_courante = 0
         sac_courant = []
 
-        # Étape 3 : On lit la combinaison binaire chiffre par chiffre
+        # Lecture de la combinaison bit par bit pour construire le sac correspondant
         for j in range(n):
-            if combinaison_binaire[j] == '1': # Si on voit un 1, on met l'objet dans le sac
+            if combinaison_binaire[j] == '1': # Si le bit vaut 1, l'objet est sélectionné
                 masse_courante += objets[j]["masse"]
                 utilite_courante += objets[j]["utilite"]
                 sac_courant.append(objets[j]["nom"])
 
-        # Étape 4 : L'épreuve du juge
+        # Vérification des contraintes et mise à jour de la meilleure solution globale
+        # On arrondit la masse pour éviter les approximations de calcul sur les flottants
         if round(masse_courante, 3) <= capacite_max and utilite_courante > meilleure_utilite:
             meilleure_utilite = utilite_courante
             meilleur_sac = sac_courant
@@ -39,6 +42,7 @@ def sac_a_dos_exact(capacite_max):
 
 
 if __name__ == "__main__":
+    # Évaluation de l'algorithme exact sur différentes capacités maximales
     for C in [0.6, 2, 3, 4, 5]:
         debut = time.time()
         sac_optimal, score = sac_a_dos_exact(C)
@@ -46,6 +50,7 @@ if __name__ == "__main__":
 
         print(f"\n--- Résultat pour C = {C} ---")
 
+        # Calcul a posteriori de la masse totale du sac optimal pour l'affichage
         poids_total = sum(o["masse"] for o in objets if o["nom"] in sac_optimal)
 
         print(f"Composition du sac : {sac_optimal}")
