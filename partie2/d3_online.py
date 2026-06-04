@@ -1,135 +1,126 @@
 import time
+import math
 from utils import load_marchandises, print_results
 
-def obtenir_rotations_valides(item, LONGUEUR_MAX, LARGEUR_MAX, HAUTEUR_MAX):
-    """Génère et trie les 6 orientations physiques possibles (Flattest Z first)."""
-    L, l, h = item['longueur'], item['largeur'], item['hauteur']
-    toutes_les_rotations = [
-        (L, l, h), (L, h, l), (l, L, h),
-        (l, h, L), (h, L, l), (h, l, L)
-    ]
-    rotations_valides = []
-    for rx, ry, rz in toutes_les_rotations:
-        if rx <= LONGUEUR_MAX and ry <= LARGEUR_MAX and rz <= HAUTEUR_MAX:
-            if (rx, ry, rz) not in rotations_valides:
-                rotations_valides.append((rx, ry, rz))
-    rotations_valides.sort(key=lambda x: (x[2], x[1], x[0]))
-    return rotations_valides
+# Dimensions wagon standard
+L_WAG, l_WAG, H_WAG = 11.583, 2.294, 2.569
+VOL_WAG = L_WAG * l_WAG * H_WAG
 
-def intersect_3d(b1, b2):
-    """Détection de collision géométrique standard (AABB)."""
-    return not (
-        b1['x'] + b1['longueur'] <= b2['x'] or b2['x'] + b2['longueur'] <= b1['x'] or
-        b1['y'] + b1['largeur'] <= b2['y'] or b2['y'] + b2['largeur'] <= b1['y'] or
-        b1['z'] + b1['hauteur'] <= b2['z'] or b2['z'] + b2['hauteur'] <= b1['z']
-    )
 
-def true_online_3d_corner_points_speed(marchandises, LONGUEUR_MAX, LARGEUR_MAX, HAUTEUR_MAX):
-    """
-    Algorithme Online Corner-Points optimisé pour la scalabilité (Challenge Temps).
-    Chaque wagon maintient son propre historique de points d'ancrage actifs.
-    """
-    # Chaque wagon est modélisé par un dictionnaire pour éviter la régénération des points
-    wagons = [] 
+class Marchandise:
+    __slots__ = ['id', 'rotations']
 
-    for item in marchandises:
-        rotations = obtenir_rotations_valides(item, LONGUEUR_MAX, LARGEUR_MAX, HAUTEUR_MAX)
-        if not rotations: 
-            continue
+    def __init__(self, data: dict):
+        self.id = data['id']
+        L, l, H = data['longueur'], data['largeur'], data['hauteur']
 
-        objet_place = False
+        if data.get('retournable', 1) == 0:
+            rot = [(L, l, H), (l, L, H)]
+        else:
+            rot = [(L, l, H), (L, H, l), (l, L, H), (l, H, L), (H, L, l), (H, l, L)]
 
-        # Parcours des wagons ouverts (First-Fit)
-        for wagon in wagons:
-            # On extrait et trie la liste restreinte des points valides de ce wagon
-            sorted_candidates = sorted(wagon['candidates'], key=lambda p: (p[2], p[1], p[0]))
+        self.rotations = sorted(set(rot), key=lambda r: r[2])
 
-            for cx, cy, cz in sorted_candidates:
-                for long_obj, larg_obj, haut_obj in rotations:
-                    
-                    # Vérification des frontières du wagon
-                    if cx + long_obj > LONGUEUR_MAX or cy + larg_obj > LARGEUR_MAX or cz + haut_obj > HAUTEUR_MAX:
-                        continue
 
-                    simulation = {'x': cx, 'y': cy, 'z': cz, 'longueur': long_obj, 'largeur': larg_obj, 'hauteur': haut_obj}
+class Wagon:
+    __slots__ = ['boites', 'coins', 'vol_used']
 
-                    # Vérification des collisions uniquement avec les objets réels du wagon
-                    collision = False
-                    for obj in wagon['objets']:
-                        if intersect_3d(simulation, obj):
-                            collision = True
-                            break
+    def __init__(self):
+        self.boites: list[tuple] = []
+        self.coins: set[tuple] = {(0.0, 0.0, 0.0)}
+        self.vol_used: float = 0.0
 
-                    if not collision:
-                        # Emplacement validé ! On crée l'objet
-                        nouvel_obj = {
-                            'id': item['id'], 'nom': item['nom'],
-                            'x': cx, 'y': cy, 'z': cz,
-                            'longueur': long_obj, 'largeur': larg_obj, 'hauteur': haut_obj
-                        }
-                        wagon['objets'].append(nouvel_obj)
-                        
-                        # 🌟 MISE À JOUR INCRÉMENTALE DES CORNER POINTS (O(1)) 🌟
-                        # 1. Le point utilisé est consommé, on le retire
-                        wagon['candidates'].remove((cx, cy, cz))
-                        
-                        # 2. On génère les 3 nouveaux points d'appui potentiels si dans les clous
-                        x_point, y_point, z_point = cx + long_obj, cy + larg_obj, cz + haut_obj
-                        if x_point < LONGUEUR_MAX: wagon['candidates'].add((x_point, cy, cz))
-                        if y_point < LARGEUR_MAX: wagon['candidates'].add((cx, y_point, cz))
-                        if z_point < HAUTEUR_MAX: wagon['candidates'].add((cx, cy, z_point))
-                        
-                        # 3. Élagage Volumétrique : On supprime les points existants désormais "noyés" dans l'objet
-                        points_morts = []
-                        for px, py, pz in wagon['candidates']:
-                            if cx <= px < cx + long_obj and cy <= py < cy + larg_obj and cz <= pz < cz + haut_obj:
-                                points_morts.append((px, py, pz))
-                        for pt in points_morts:
-                            wagon['candidates'].remove(pt)
+    def intersecte(self, b1: tuple) -> bool:
+        for b2 in self.boites:
+            if (b1[0] < b2[0] + b2[3] - 1e-4 and b1[0] + b1[3] > b2[0] + 1e-4 and
+                    b1[1] < b2[1] + b2[4] - 1e-4 and b1[1] + b1[4] > b2[1] + 1e-4 and
+                    b1[2] < b2[2] + b2[5] - 1e-4 and b1[2] + b1[5] > b2[2] + 1e-4):
+                return True
+        return False
 
-                        objet_place = True
-                        break
-                if objet_place: break
-            if objet_place: break
+    def est_supportee(self, xmin: float, xmax: float, ymin: float, ymax: float,
+                      zmin: float, seuil: float = 0.70) -> bool:
+        if zmin <= 1e-4:
+            return True
 
-        # Si aucun espace dans aucun wagon : Ouverture d'un nouveau wagon
-        if not objet_place:
-            long_obj, larg_obj, haut_obj = rotations[0]
-            nouveau_wagon = {
-                'objets': [{
-                    'id': item['id'], 'nom': item['nom'],
-                    'x': 0, 'y': 0, 'z': 0,
-                    'longueur': long_obj, 'largeur': larg_obj, 'hauteur': haut_obj
-                }],
-                'candidates': set()
-            }
-            # Initialisation des points de départ du wagon vide autour du premier colis
-            if long_obj < LONGUEUR_MAX: nouveau_wagon['candidates'].add((long_obj, 0, 0))
-            if larg_obj < LARGEUR_MAX: nouveau_wagon['candidates'].add((0, larg_obj, 0))
-            if haut_obj < HAUTEUR_MAX: nouveau_wagon['candidates'].add((0, 0, haut_obj))
-            
-            wagons.append(nouveau_wagon)
+        aire_base = (xmax - xmin) * (ymax - ymin)
+        aire_support = 0.0
 
-    # Extraction finale pour correspondre exactement au format attendu par print_results
-    return [w['objets'] for w in wagons]
+        for b_xmin, b_ymin, b_zmin, b_L, b_l, b_H in self.boites:
+            if abs(b_zmin + b_H - zmin) <= 1e-4:
+                ix_min = max(xmin, b_xmin)
+                ix_max = min(xmax, b_xmin + b_L)
+                iy_min = max(ymin, b_ymin)
+                iy_max = min(ymax, b_ymin + b_l)
+                if ix_max > ix_min and iy_max > iy_min:
+                    aire_support += (ix_max - ix_min) * (iy_max - iy_min)
+
+        return (aire_support / aire_base) >= seuil
+
+    def placer(self, coin: tuple, rL: float, rl: float, rH: float) -> None:
+        cx, cy, cz = coin
+        self.boites.append((cx, cy, cz, rL, rl, rH))
+        self.vol_used += rL * rl * rH
+        self.coins.discard(coin)
+        for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
+            if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
+                self.coins.add(npt)
+
+
+def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
+    """First-fit across wagons, best position within wagon (minimise volume restant)."""
+    for w in wagons:
+        best_local = None  # (remaining, coin, rotation)
+
+        for coin in sorted(w.coins, key=lambda c: (c[2], c[0], c[1])):
+            cx, cy, cz = coin
+            for rL, rl, rH in item.rotations:
+                if cx + rL <= L_WAG + 1e-4 and cy + rl <= l_WAG + 1e-4 and cz + rH <= H_WAG + 1e-4:
+                    if not w.intersecte((cx, cy, cz, rL, rl, rH)):
+                        if w.est_supportee(cx, cx + rL, cy, cy + rl, cz):
+                            remaining = VOL_WAG - w.vol_used - rL * rl * rH
+                            if best_local is None or remaining < best_local[0]:
+                                best_local = (remaining, coin, (rL, rl, rH))
+
+        if best_local is not None:
+            _, coin, (rL, rl, rH) = best_local
+            w.placer(coin, rL, rl, rH)
+            return
+
+    # Aucun wagon disponible — ouverture d'un nouveau
+    nw = Wagon()
+    rL, rl, rH = item.rotations[0]
+    nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH))
+    nw.vol_used = rL * rl * rH
+    nw.coins = {(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)}
+    wagons.append(nw)
+
 
 if __name__ == "__main__":
-    print("\n--- Démarrage Bin Packing 3D (ON-LINE CHALLENGE-SPEED) ---")
-    
-    items = load_marchandises()
-    
-    if items:
-        LONGUEUR_WAGON = 11.583 
-        LARGEUR_WAGON = 2.294
-        HAUTEUR_WAGON = 2.569
-        
-        start_time = time.time()
-        resultat = true_online_3d_corner_points_speed(items, LONGUEUR_MAX=LONGUEUR_WAGON, LARGEUR_MAX=LARGEUR_WAGON, HAUTEUR_MAX=HAUTEUR_WAGON)
-        temps_calcul = time.time() - start_time
-        
-        nb_wagons = len(resultat)
-        volume_total_dispo = nb_wagons * (LONGUEUR_WAGON * LARGEUR_WAGON * HAUTEUR_WAGON)
-        volume_objets = sum(obj['longueur'] * obj['largeur'] * obj['hauteur'] for obj in items)
-        total_unused_volume = volume_total_dispo - volume_objets
-        
-        print_results(dimension_label="d=3", mode_label="Online Speed Corner-Points", nb_wagons=nb_wagons, total_unused=total_unused_volume, execution_time=temps_calcul)
+    print("=" * 65)
+    print("  D3 ONLINE - CORNER POINTS BEST-FIT LOCAL")
+    print("=" * 65)
+
+    marchandises = load_marchandises()
+    if not marchandises:
+        raise SystemExit("Erreur : Impossible de charger les données.")
+
+    vol_total = sum(m['longueur'] * m['largeur'] * m['hauteur'] for m in marchandises)
+    borne_inf = math.ceil(vol_total / VOL_WAG)
+
+    print(f"Chargement : {len(marchandises)} marchandises chargées.")
+    print(f"Volume total : {vol_total:.2f} m³ | Borne inférieure théorique : {borne_inf} wagons")
+    print("-" * 65)
+
+    items = [Marchandise(m) for m in marchandises]
+    wagons: list[Wagon] = []
+
+    t_debut = time.time()
+    for item in items:
+        placer_item(item, wagons)
+    temps_total = time.time() - t_debut
+
+    nb_wagons = len(wagons)
+    volume_perdu = nb_wagons * VOL_WAG - vol_total
+
+    print_results("d=3", "Online Corner-Points Best-Fit Local", nb_wagons, volume_perdu, temps_total)
