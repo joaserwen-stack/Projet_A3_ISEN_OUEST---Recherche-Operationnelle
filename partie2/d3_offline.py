@@ -11,9 +11,10 @@ L_WAG, l_WAG, H_WAG = 11.583, 2.294, 2.569  # Dimensions d'un wagon en mètres
 VOL_WAG = L_WAG * l_WAG * H_WAG
 TEMPS_MAX = 300
 TAILLE_POPULATION = 20
+SEUIL_CATACLYSME = 200  # générations sans amélioration avant reset
 
 # ═══════════════════════════════════════════════════════════════════
-# CLASSES (STRUCTURES DE DONNÉES PURES)
+# CLASSES
 # ═══════════════════════════════════════════════════════════════════
 class Marchandise:
     def __init__(self, data):
@@ -25,7 +26,7 @@ class Marchandise:
         else:
             rot = [(L, l, H), (L, H, l), (l, L, H), (l, H, L), (H, L, l), (H, l, L)]
 
-        # L'heuristique vitale de la V1.5 : on trie pour tasser au sol
+        # Trier par hauteur croissante pour tasser au sol en priorité
         self.rotations = sorted(list(set(rot)), key=lambda r: r[2])
 
 class Wagon:
@@ -42,7 +43,7 @@ class Wagon:
         return False
 
 # ═══════════════════════════════════════════════════════════════════
-# MULTIPROCESSING : WORKER (module-level pour pickling)
+# MULTIPROCESSING : workers déclarés au niveau module pour pickling
 # ═══════════════════════════════════════════════════════════════════
 _pool_dict_items = None
 
@@ -55,7 +56,13 @@ def _eval_wrapper(args):
     return evaluer_liste(individu, _pool_dict_items, record)
 
 # ═══════════════════════════════════════════════════════════════════
-# PHASE 2 : ÉVALUATION GÉOMÉTRIQUE (BEST-FIT V2.0)
+# ÉVALUATION GÉOMÉTRIQUE
+# Décodeur : permutation d'IDs → nb wagons + fitness
+# Placement : DBLF (Deepest Bottom-Left Fill) + Best-Fit wagon
+#   - DBLF : tri coins par (x, z, y) → remplit de l'avant vers l'arrière
+#             puis plancher, puis Y — optimal pour wagons longs
+#   - Best-Fit : parmi les wagons acceptant l'item, choisit celui avec
+#                le moins de volume résiduel → minimise les vides
 # ═══════════════════════════════════════════════════════════════════
 def evaluer_liste(ordre, dict_items, record_wagons_actuel):
     wagons = []
@@ -67,7 +74,7 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
         for wi, w in enumerate(wagons):
             vol_used = sum(b[3] * b[4] * b[5] for b in w.boites)
             placed_in_wagon = False
-            for coin in sorted(w.coins, key=lambda c: (c[0], c[2], c[1])):
+            for coin in sorted(w.coins, key=lambda c: (c[0], c[2], c[1])):  # DBLF
                 if placed_in_wagon:
                     break
                 cx, cy, cz = coin
@@ -90,7 +97,7 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
                 if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
                     w.coins.add(npt)
         else:
-            # EARLY EXIT
+            # Early exit : dépasser le record actuel ne sert à rien
             if len(wagons) + 1 > record_wagons_actuel:
                 return float('inf'), float('inf')
 
@@ -110,9 +117,10 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
     return nb_wagons, fitness
 
 # ═══════════════════════════════════════════════════════════════════
-# OPERATEURS GENETIQUES
+# OPÉRATEURS GÉNÉTIQUES
 # ═══════════════════════════════════════════════════════════════════
 def croisement_ox(p1, p2):
+    """Order Crossover (OX) : préserve les sous-séquences relatives."""
     n = len(p1)
     a, b = sorted(random.sample(range(n), 2))
     enfant = [None] * n
@@ -128,17 +136,26 @@ def croisement_ox(p1, p2):
     return enfant
 
 def mutation_swap(ordre, prob=0.35):
+    """Échange deux positions aléatoires."""
     if random.random() < prob:
         idx1, idx2 = random.sample(range(len(ordre)), 2)
         ordre[idx1], ordre[idx2] = ordre[idx2], ordre[idx1]
     return ordre
 
 # ═══════════════════════════════════════════════════════════════════
-# EXECUTION PRINCIPALE
+# EXÉCUTION PRINCIPALE
+# Architecture : GA mémétique
+#   - Population : 4 seeds heuristiques + 16 aléatoires
+#   - Sélection  : top-10 élitiste
+#   - Croisement : OX sur permutations
+#   - Mutation   : swap (prob=0.35)
+#   - Cataclysme : si stagnation > SEUIL_CATACLYSME générations,
+#                  garder top-2 et régénérer le reste → diversité forcée
+#   - Pool       : évaluations parallèles sur cpu_count() workers
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 65)
-    print("  D3 OFFLINE - ALGORITHME GÉNÉTIQUE V2.0 (Best-Fit + Pool)")
+    print("  D3 OFFLINE - GA V3.0 (DBLF + Best-Fit + Pool + Cataclysme)")
     print("=" * 65)
 
     marchandises = load_marchandises()
@@ -155,7 +172,6 @@ if __name__ == "__main__":
     print(f"Volume total : {vol_total:.2f} m³ | Borne inférieure théorique : {borne_inf} wagons")
     print(f"Parallélisation : {n_workers} workers")
 
-    # Population initiale : 4 seeds heuristiques + reste aléatoire
     def seed_par(key_fn):
         return sorted(ids, key=lambda i: key_fn(dict_items[i].rotations[0]), reverse=True)
 
@@ -177,6 +193,7 @@ if __name__ == "__main__":
     generation = 0
     meilleur_nb_wagons = float('inf')
     meilleur_fitness = float('inf')
+    gens_sans_amelioration = 0
 
     with Pool(processes=n_workers, initializer=_init_pool, initargs=(dict_items,)) as pool:
         while time.time() - t_debut < TEMPS_MAX:
@@ -192,14 +209,29 @@ if __name__ == "__main__":
             if gen_best_fit < meilleur_fitness:
                 meilleur_nb_wagons = gen_best_nb
                 meilleur_fitness = gen_best_fit
+                gens_sans_amelioration = 0
                 taux_dernier = (meilleur_fitness - (meilleur_nb_wagons - 1)) * 100
-                print(f"[Gen {generation:03d}] NOUVEAU RECORD : {meilleur_nb_wagons} wagons (Dernier rempli à {taux_dernier:.1f}%) | Temps : {time.time() - t_debut:.2f}s")
+                print(f"[Gen {generation:04d}] NOUVEAU RECORD : {meilleur_nb_wagons} wagons (Dernier rempli à {taux_dernier:.1f}%) | Temps : {time.time() - t_debut:.2f}s")
 
                 if meilleur_nb_wagons <= borne_inf:
                     print(f"\n[STOP] Borne inférieure théorique absolue ({borne_inf}) atteinte !")
                     break
-            elif generation % 50 == 0:
-                print(f"   [Gen {generation:03d}] Recherche en cours... (Temps : {time.time() - t_debut:.2f}s)")
+            else:
+                gens_sans_amelioration += 1
+                if generation % 50 == 0:
+                    print(f"   [Gen {generation:04d}] Recherche en cours... (stagnation : {gens_sans_amelioration} gens | Temps : {time.time() - t_debut:.2f}s)")
+
+            # Cataclysme : stagnation prolongée → réinitialiser sauf top-2
+            if gens_sans_amelioration >= SEUIL_CATACLYSME:
+                top_2 = [indiv for _, _, indiv in scores_pop[:2]]
+                population = top_2[:]
+                while len(population) < TAILLE_POPULATION:
+                    indiv = list(ids)
+                    random.shuffle(indiv)
+                    population.append(indiv)
+                gens_sans_amelioration = 0
+                print(f"   [Gen {generation:04d}] *** CATACLYSME *** diversité réinitialisée (top-2 conservé)")
+                continue
 
             top_10 = [indiv for nb, fit, indiv in scores_pop[:10]]
 
@@ -218,4 +250,4 @@ if __name__ == "__main__":
     print("-" * 65)
 
     volume_perdu = (meilleur_nb_wagons * VOL_WAG) - vol_total
-    print_results("d=3", "Offline V2.0 (Best-Fit + Pool)", meilleur_nb_wagons, volume_perdu, temps_total)
+    print_results("d=3", "Offline V3.0 (DBLF + Best-Fit + Pool + Cataclysme)", meilleur_nb_wagons, volume_perdu, temps_total)
