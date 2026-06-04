@@ -51,21 +51,18 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
         place = False
 
         for w in wagons:
-            w.coins.sort(key=lambda c: (c[2], c[1], c[0]))
-
-            for coin in list(w.coins):
+            for coin in sorted(w.coins, key=lambda c: (c[2], c[1], c[0])):
                 cx, cy, cz = coin
                 for rL, rl, rH in item.rotations:
                     if cx + rL <= L_WAG + 1e-4 and cy + rl <= l_WAG + 1e-4 and cz + rH <= H_WAG + 1e-4:
                         boite_cand = (cx, cy, cz, rL, rl, rH)
                         if not w.intersecte(boite_cand):
                             w.boites.append(boite_cand)
-                            w.coins.remove(coin)
+                            w.coins.discard(coin)
 
                             for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
                                 if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
-                                    if npt not in w.coins:
-                                        w.coins.append(npt)
+                                    w.coins.add(npt)
                             place = True
                             break
                 if place: break
@@ -79,7 +76,7 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
             nw = Wagon()
             rL, rl, rH = item.rotations[0]
             nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH))
-            nw.coins = [(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)]
+            nw.coins = {(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)}
             wagons.append(nw)
 
     nb_wagons = len(wagons)
@@ -136,13 +133,22 @@ if __name__ == "__main__":
     print(f"Chargement : {len(marchandises)} marchandises chargées.")
     print(f"Volume total : {vol_total:.2f} m³ | Borne inférieure théorique : {borne_inf} wagons")
 
-    # Population initiale (100% aléatoire)
-    population = []
-    for _ in range(TAILLE_POPULATION):
+    # Population initiale : 4 seeds heuristiques + reste aléatoire
+    def seed_par(key_fn):
+        return sorted(ids, key=lambda i: key_fn(dict_items[i].rotations[0]), reverse=True)
+
+    seeds = [
+        seed_par(lambda r: r[0] * r[1] * r[2]),   # volume desc
+        seed_par(lambda r: r[2]),                   # hauteur desc
+        seed_par(lambda r: r[0] * r[1]),            # aire base desc
+        seed_par(lambda r: r[0]),                   # longueur desc
+    ]
+    population = seeds[:]
+    while len(population) < TAILLE_POPULATION:
         indiv = list(ids)
         random.shuffle(indiv)
         population.append(indiv)
-    print(f"Population de départ : {TAILLE_POPULATION} listes d'ordres générées.")
+    print(f"Population de départ : {len(seeds)} seeds heuristiques + {TAILLE_POPULATION - len(seeds)} aléatoires.")
     print("-" * 65)
 
     t_debut = time.time()
