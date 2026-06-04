@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python partie2/d3_offline.py)",
+      "Bash(python3 partie2/d3_offline.py)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(python -m py_compile partie2/d3_offline_ma.py)",
+      "Bash(python3 -m py_compile /mnt/c/Users/dacks/Documents/Cours/A3/Python/ProjetRO/partie2/d3_offline_ma.py)",
+      "Bash(python3 -m py_compile /mnt/c/Users/dacks/Documents/Cours/A3/Python/ProjetRO/partie2/d3_explore.py)",
+      "Bash(python -m py_compile partie2/d3_offline_cpga.py)",
+      "Bash(python3 -m py_compile /mnt/c/Users/dacks/Documents/Cours/A3/Python/ProjetRO/partie2/d3_offline_cpga.py)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(python *)",
+      "Bash(python3 *)"
+    ]
+  }
+}

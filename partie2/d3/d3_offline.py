@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import random
 import math
@@ -137,6 +141,77 @@ def evaluer_liste(ordre: list, dict_items: dict, record_wagons_actuel: int) -> t
     return nb_wagons, fitness
 
 
+# --- Extraction du contenu des wagons avec IDs (pour visualisation) ---
+
+def extraire_wagons(ordre: list, dict_items: dict) -> list[list[tuple]]:
+    """Re-runs packing on given order, collecting box positions with item IDs.
+
+    Returns list of wagons; each wagon is a list of
+    (cx, cy, cz, rL, rl, rH, item_id) tuples.
+    """
+    wagons_boites: list[list] = []
+    wagons_coins: list[set] = []
+    wagons_vol: list[float] = []
+
+    def _intersecte(boites, b1):
+        for b2 in boites:
+            if (b1[0] < b2[0] + b2[3] - 1e-4 and b1[0] + b1[3] > b2[0] + 1e-4 and
+                    b1[1] < b2[1] + b2[4] - 1e-4 and b1[1] + b1[4] > b2[1] + 1e-4 and
+                    b1[2] < b2[2] + b2[5] - 1e-4 and b1[2] + b1[5] > b2[2] + 1e-4):
+                return True
+        return False
+
+    def _est_supportee(boites, xmin, xmax, ymin, ymax, zmin, seuil=0.70):
+        if zmin <= 1e-4:
+            return True
+        aire_base = (xmax - xmin) * (ymax - ymin)
+        aire_sup = 0.0
+        for b in boites:
+            if abs(b[2] + b[5] - zmin) <= 1e-4:
+                ox = min(xmax, b[0] + b[3]) - max(xmin, b[0])
+                oy = min(ymax, b[1] + b[4]) - max(ymin, b[1])
+                if ox > 0 and oy > 0:
+                    aire_sup += ox * oy
+        return (aire_sup / aire_base) >= seuil
+
+    for oid in ordre:
+        item = dict_items[oid]
+        best = None
+
+        for wi in range(len(wagons_boites)):
+            placed = False
+            for coin in sorted(wagons_coins[wi], key=lambda c: (c[2], c[0], c[1])):
+                if placed:
+                    break
+                cx, cy, cz = coin
+                for rL, rl, rH in item.rotations:
+                    if cx + rL <= L_WAG + 1e-4 and cy + rl <= l_WAG + 1e-4 and cz + rH <= H_WAG + 1e-4:
+                        if not _intersecte(wagons_boites[wi], (cx, cy, cz, rL, rl, rH)):
+                            if _est_supportee(wagons_boites[wi], cx, cx + rL, cy, cy + rl, cz):
+                                remaining = VOL_WAG - wagons_vol[wi] - rL * rl * rH
+                                if best is None or remaining < best[0]:
+                                    best = (remaining, wi, coin, (rL, rl, rH))
+                                placed = True
+                                break
+
+        if best is not None:
+            _, wi, coin, (rL, rl, rH) = best
+            cx, cy, cz = coin
+            wagons_boites[wi].append((cx, cy, cz, rL, rl, rH, oid))
+            wagons_vol[wi] += rL * rl * rH
+            wagons_coins[wi].discard(coin)
+            for npt in [(cx + rL, cy, cz), (cx, cy + rl, cz), (cx, cy, cz + rH)]:
+                if npt[0] <= L_WAG and npt[1] <= l_WAG and npt[2] <= H_WAG:
+                    wagons_coins[wi].add(npt)
+        else:
+            rL, rl, rH = item.rotations[0]
+            wagons_boites.append([(0.0, 0.0, 0.0, rL, rl, rH, oid)])
+            wagons_coins.append({(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)})
+            wagons_vol.append(rL * rl * rH)
+
+    return wagons_boites
+
+
 # --- Opérateurs génétiques ---
 
 def croisement_ox(p1: list, p2: list) -> list:
@@ -193,6 +268,7 @@ class AlgorithmeGenetique:
         self.population: list[list] = []
         self.meilleur_nb_wagons: float = float('inf')
         self.meilleur_fitness: float = float('inf')
+        self.meilleur_individu: list = []
         self.generation: int = 0
 
     def _creer_seeds(self) -> list[list]:
@@ -214,6 +290,7 @@ class AlgorithmeGenetique:
             if fit < self.meilleur_fitness:
                 self.meilleur_nb_wagons = nb_w
                 self.meilleur_fitness = fit
+                self.meilleur_individu = seed[:]
                 taux = (fit - (nb_w - 1)) * 100
                 print(f"[Init] Seed {idx+1} validée → {nb_w} wagons (Dernier rempli à {taux:.1f}%)")
 
@@ -249,11 +326,12 @@ class AlgorithmeGenetique:
         while time.time() - t_debut < TEMPS_MAX:
             self.generation += 1
             scores = self._evaluer(pool)
-            gen_best_nb, gen_best_fit, _ = scores[0]
+            gen_best_nb, gen_best_fit, gen_best_indiv = scores[0]
 
             if gen_best_fit < self.meilleur_fitness:
                 self.meilleur_nb_wagons = gen_best_nb
                 self.meilleur_fitness = gen_best_fit
+                self.meilleur_individu = gen_best_indiv[:]
                 taux = (self.meilleur_fitness - (self.meilleur_nb_wagons - 1)) * 100
                 elapsed = time.time() - t_debut
                 print(f"[Gen {self.generation:03d}] NOUVEAU RECORD : {self.meilleur_nb_wagons} wagons "
@@ -304,3 +382,17 @@ if __name__ == "__main__":
 
     volume_perdu = (ga.meilleur_nb_wagons * VOL_WAG) - vol_total
     print_results("d=3", "Offline V6.0", ga.meilleur_nb_wagons, volume_perdu, temps_total)
+
+    # Extraction du contenu des wagons pour visualisation
+    print("\nExtraction du contenu des wagons...")
+    wagons_boites = extraire_wagons(ga.meilleur_individu, dict_items)
+    print(f"{len(wagons_boites)} wagons extraits.")
+
+    try:
+        from d3_visualisation import visualiser_wagons
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rendus")
+        os.makedirs(output_dir, exist_ok=True)
+        visualiser_wagons(wagons_boites, output_dir=output_dir)
+        print(f"Images sauvegardées dans : {output_dir}")
+    except ImportError:
+        print("d3_visualisation non disponible — visualisation ignorée.")

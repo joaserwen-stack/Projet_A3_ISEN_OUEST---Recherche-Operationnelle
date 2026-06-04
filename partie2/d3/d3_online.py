@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import math
 from utils import load_marchandises, print_results
@@ -26,6 +30,7 @@ class Wagon:
     __slots__ = ['boites', 'coins', 'vol_used']
 
     def __init__(self):
+        # boites = (cx, cy, cz, rL, rl, rH, item_id)
         self.boites: list[tuple] = []
         self.coins: set[tuple] = {(0.0, 0.0, 0.0)}
         self.vol_used: float = 0.0
@@ -46,7 +51,7 @@ class Wagon:
         aire_base = (xmax - xmin) * (ymax - ymin)
         aire_support = 0.0
 
-        for bx, by, bz, bL, bl, bH in self.boites:
+        for bx, by, bz, bL, bl, bH, *_ in self.boites:
             if abs(bz + bH - zmin) <= EPS:
                 ox = min(xmax, bx + bL) - max(xmin, bx)
                 oy = min(ymax, by + bl) - max(ymin, by)
@@ -59,10 +64,10 @@ class Wagon:
         if x <= L_WAG and y <= l_WAG and z <= H_WAG:
             self.coins.add((x, y, z))
 
-    def placer(self, coin: tuple, rL: float, rl: float, rH: float) -> None:
+    def placer(self, coin: tuple, rL: float, rl: float, rH: float, item_id: int = 0) -> None:
         cx, cy, cz = coin
         n_avant = len(self.boites)
-        self.boites.append((cx, cy, cz, rL, rl, rH))
+        self.boites.append((cx, cy, cz, rL, rl, rH, item_id))
         self.vol_used += rL * rl * rH
         self.coins.discard(coin)
 
@@ -74,7 +79,7 @@ class Wagon:
         self._ajouter_coin(cx, cy, zf)
 
         # Extreme points : cross-projection entre nouvelle boîte et existantes
-        for bx, by, bz, bL, bl, bH in self.boites[:n_avant]:
+        for bx, by, bz, bL, bl, bH, *_ in self.boites[:n_avant]:
             bxf, byf, bzf = bx + bL, by + bl, bz + bH
             # x de la nouvelle boîte × y,z de l'existante (et vice-versa)
             for nx in (cx, xf):
@@ -116,15 +121,20 @@ def placer_item(item: Marchandise, wagons: list[Wagon]) -> None:
 
         if best_local is not None:
             _, coin, (rL, rl, rH) = best_local
-            w.placer(coin, rL, rl, rH)
+            w.placer(coin, rL, rl, rH, item.id)
             return
 
     nw = Wagon()
     rL, rl, rH = item.rotations[0]
-    nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH))
+    nw.boites.append((0.0, 0.0, 0.0, rL, rl, rH, item.id))
     nw.vol_used = rL * rl * rH
     nw.coins = {(rL, 0.0, 0.0), (0.0, rl, 0.0), (0.0, 0.0, rH)}
     wagons.append(nw)
+
+
+def wagons_vers_boites(wagons: list[Wagon]) -> list[list[tuple]]:
+    """Converts list of Wagon objects to list of boites lists for visualization."""
+    return [list(w.boites) for w in wagons]
 
 
 if __name__ == "__main__":
@@ -155,3 +165,14 @@ if __name__ == "__main__":
     volume_perdu = nb_wagons * VOL_WAG - vol_total
 
     print_results("d=3", "Online Extreme-Points Best-Fit Local", nb_wagons, volume_perdu, temps_total)
+
+    # Visualisation
+    wagons_boites = wagons_vers_boites(wagons)
+    try:
+        from d3_visualisation import visualiser_wagons
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rendus")
+        os.makedirs(output_dir, exist_ok=True)
+        visualiser_wagons(wagons_boites, output_dir=output_dir, prefix="online_wagon")
+        print(f"Images sauvegardées dans : {output_dir}")
+    except ImportError:
+        print("d3_visualisation non disponible — visualisation ignorée.")

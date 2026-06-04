@@ -1,15 +1,55 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import math
-from utils import load_marchandises, print_results
+from utils import load_marchandises, print_results, WAGON_L, WAGON_l
 
-# Constantes définissant les dimensions d'un wagon de train
-LONGUEUR_WAGON = 11.583  # en mètres
-LARGEUR_WAGON = 2.294    # en mètres
-
-# EPS (Epsilon) est une toute petite valeur pour gérer les erreurs d'arrondi flottant.
-# Par exemple, 1.9999999 au lieu de 2.0. On tolère cet écart pour ne pas
-# refuser un objet qui rentre en réalité parfaitement dans l'espace disponible.
+LONGUEUR_WAGON = WAGON_L
+LARGEUR_WAGON = WAGON_l
 EPS = 1e-9
+
+
+def mettre_a_jour_espaces(wagon, obj_x, obj_y, obj_longueur, obj_largeur):
+    nouveaux_espaces = []
+    bord_droit_obj = obj_x + obj_longueur
+    bord_haut_obj = obj_y + obj_largeur
+
+    for espace_x, espace_y, espace_largeur, espace_hauteur in wagon['espaces_libres']:
+        bord_droit_espace = espace_x + espace_largeur
+        bord_haut_espace = espace_y + espace_hauteur
+
+        if (obj_x >= bord_droit_espace - EPS or bord_droit_obj <= espace_x + EPS or
+                obj_y >= bord_haut_espace - EPS or bord_haut_obj <= espace_y + EPS):
+            nouveaux_espaces.append((espace_x, espace_y, espace_largeur, espace_hauteur))
+            continue
+
+        if obj_x > espace_x + EPS:
+            nouveaux_espaces.append((espace_x, espace_y, obj_x - espace_x, espace_hauteur))
+        if bord_droit_obj < bord_droit_espace - EPS:
+            nouveaux_espaces.append((bord_droit_obj, espace_y, bord_droit_espace - bord_droit_obj, espace_hauteur))
+        if obj_y > espace_y + EPS:
+            nouveaux_espaces.append((espace_x, espace_y, espace_largeur, obj_y - espace_y))
+        if bord_haut_obj < bord_haut_espace - EPS:
+            nouveaux_espaces.append((espace_x, bord_haut_obj, espace_largeur, bord_haut_espace - bord_haut_obj))
+
+    wagon['espaces_libres'] = nettoyer_espaces_inutiles(nouveaux_espaces)
+
+
+def nettoyer_espaces_inutiles(espaces):
+    espaces_valides = [(x, y, l, h) for x, y, l, h in espaces if l > EPS and h > EPS]
+    espaces_utiles = []
+    for i, (x1, y1, l1, h1) in enumerate(espaces_valides):
+        contenu = False
+        for j, (x2, y2, l2, h2) in enumerate(espaces_valides):
+            if i != j and (x1 >= x2 - EPS and y1 >= y2 - EPS and
+                           x1 + l1 <= x2 + l2 + EPS and y1 + h1 <= y2 + h2 + EPS):
+                contenu = True
+                break
+        if not contenu:
+            espaces_utiles.append((x1, y1, l1, h1))
+    return espaces_utiles
 
 
 def remplir_wagons(objets):
@@ -114,97 +154,6 @@ def placer_objet(wagons, objet):
         )
         # On ajoute ce nouveau wagon à la liste
         wagons.append(nouveau_wagon)
-
-
-def mettre_a_jour_espaces(wagon, obj_x, obj_y, obj_longueur, obj_largeur):
-    """
-    Quand on pose un objet dans un espace libre, cet espace se divise en plusieurs morceaux.
-    Cette fonction recalcule les zones encore libres autour de l'objet qu'on vient de poser.
-    """
-    nouveaux_espaces = []
-
-    # Coordonnées des bords droit et haut de l'objet placé
-    bord_droit_obj = obj_x + obj_longueur
-    bord_haut_obj  = obj_y + obj_largeur
-
-    # On examine chaque espace libre existant du wagon
-    for espace_x, espace_y, espace_largeur, espace_hauteur in wagon['espaces_libres']:
-        bord_droit_espace = espace_x + espace_largeur
-        bord_haut_espace  = espace_y + espace_hauteur
-
-        # Si l'objet ne touche pas cet espace, on le conserve tel quel
-        if (obj_x >= bord_droit_espace - EPS or bord_droit_obj <= espace_x + EPS or
-                obj_y >= bord_haut_espace - EPS or bord_haut_obj <= espace_y + EPS):
-            nouveaux_espaces.append((espace_x, espace_y, espace_largeur, espace_hauteur))
-            continue
-
-        # L'objet est posé dans cet espace : il le découpe en 4 morceaux au maximum
-
-        # 1. Le morceau restant a GAUCHE de l'objet
-        if obj_x > espace_x + EPS:
-            nouveaux_espaces.append((espace_x, espace_y, obj_x - espace_x, espace_hauteur))
-
-        # 2. Le morceau restant a DROITE de l'objet
-        if bord_droit_obj < bord_droit_espace - EPS:
-            nouveaux_espaces.append((bord_droit_obj, espace_y, bord_droit_espace - bord_droit_obj, espace_hauteur))
-
-        # 3. Le morceau restant EN BAS de l'objet
-        if obj_y > espace_y + EPS:
-            nouveaux_espaces.append((espace_x, espace_y, espace_largeur, obj_y - espace_y))
-
-        # 4. Le morceau restant EN HAUT de l'objet
-        if bord_haut_obj < bord_haut_espace - EPS:
-            nouveaux_espaces.append((espace_x, bord_haut_obj, espace_largeur, bord_haut_espace - bord_haut_obj))
-
-    # Le découpage génère des espaces qui se chevauchent parfois.
-    # On fait le ménage pour ne conserver que les espaces vraiment utiles.
-    wagon['espaces_libres'] = nettoyer_espaces_inutiles(nouveaux_espaces)
-
-
-def nettoyer_espaces_inutiles(espaces):
-    """
-    Supprime les espaces libres redondants.
-    Si un petit espace est entièrement contenu dans un plus grand,
-    il est inutile de le mémoriser : on ne garde que le grand.
-    """
-    # Etape 1 : On écarte les espaces trop étroits pour accueillir quoi que ce soit
-    espaces_valides = []
-    for x, y, largeur, hauteur in espaces:
-        if largeur > EPS and hauteur > EPS:
-            espaces_valides.append((x, y, largeur, hauteur))
-
-    nb_espaces = len(espaces_valides)
-    espaces_utiles = []
-
-    # Etape 2 : Pour chaque espace, on vérifie s'il est contenu dans un autre
-    for i in range(nb_espaces):
-        x_courant, y_courant, largeur_courante, hauteur_courante = espaces_valides[i]
-        bord_droit_courant = x_courant + largeur_courante
-        bord_haut_courant  = y_courant + hauteur_courante
-
-        est_avale_par_un_autre = False
-
-        for j in range(nb_espaces):
-            if i == j:  # On ne se compare pas à soi-même
-                continue
-
-            x_autre, y_autre, largeur_autre, hauteur_autre = espaces_valides[j]
-            bord_droit_autre = x_autre + largeur_autre
-            bord_haut_autre  = y_autre + hauteur_autre
-
-            # L'espace courant est-il entièrement à l'intérieur de l'espace autre ?
-            if (x_courant >= x_autre - EPS and
-                    y_courant >= y_autre - EPS and
-                    bord_droit_courant <= bord_droit_autre + EPS and
-                    bord_haut_courant  <= bord_haut_autre  + EPS):
-                est_avale_par_un_autre = True
-                break  # Inutile de continuer, on sait déjà que cet espace est redondant
-
-        # On ne garde que les espaces qui ne sont contenus dans aucun autre
-        if not est_avale_par_un_autre:
-            espaces_utiles.append(espaces_valides[i])
-
-    return espaces_utiles
 
 
 # ─── Lancement du programme ────────────────────────────────────

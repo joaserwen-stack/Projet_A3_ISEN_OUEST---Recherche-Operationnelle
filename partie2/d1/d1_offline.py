@@ -1,15 +1,21 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 from utils import load_marchandises, print_results
 
 WAGON_MAX_LENGTH = 11.583
 
-def first_fit_online(marchandises):
+def first_fit_decreasing(marchandises):
+    # Tri des marchandises par ordre décroissant de longueur
+    marchandises_triees = sorted(marchandises, key=lambda x: x['longueur'], reverse=True)
     wagons = []
     wagons_content = []
 
     # Rangement des marchandises une par une
-    for item in marchandises: # On traite les marchandises dans l'ordre d'arrivée (online)
-        placed = False 
+    for item in marchandises_triees:
+        placed = False
 
         # On parcourt les wagons existants pour trouver le premier qui a assez de place
         for i in range(len(wagons)):
@@ -26,11 +32,13 @@ def first_fit_online(marchandises):
 
     return wagons, wagons_content
 
-def best_fit_online(marchandises):
+def best_fit_decreasing(marchandises):
+    # Tri des marchandises par ordre décroissant de longueur
+    marchandises_triees = sorted(marchandises, key=lambda x: x['longueur'], reverse=True)
     wagons = []
     wagons_content = []
 
-    for item in marchandises:
+    for item in marchandises_triees:
         best_idx = -1
         min_remaining_space = WAGON_MAX_LENGTH + 1  # Initialisé à une valeur max impossible
 
@@ -44,30 +52,30 @@ def best_fit_online(marchandises):
 
         # Si on a trouvé un wagon optimal, on place la marchandise dedans
         if best_idx != -1:
-            wagons[best_idx] -= item['longueur']
-            wagons_content[best_idx].append(item)
+            wagons[best_idx] -= item['longueur'] # On met à jour l'espace restant
+            wagons_content[best_idx].append(item) # On ajoute l'objet au wagon
         else:
             # Sinon on ouvre un nouveau wagon
-            wagons.append(WAGON_MAX_LENGTH - item['longueur'])
+            wagons.append(WAGON_MAX_LENGTH - item['longueur']) # On ajoute un nouveau wagon avec l'espace restant après y avoir placé la marchandise
             wagons_content.append([item])
 
     return wagons, wagons_content
 
 if __name__ == "__main__":
-    print("d=1 Online First-fit")
+    print("d=1 Offline First-fit")
 
     items = load_marchandises()
     print(f"Nombre de marchandises chargées : {len(items)}")
 
     if items:
         start_time = time.time()
-        remains, content = first_fit_online(items)
+        remains, content = first_fit_decreasing(items)
         temps = time.time() - start_time
 
         nb_wagons = len(remains)
         total_unused_length = sum(remains)
 
-        print_results(dimension_label="d=1", mode_label="Online First-fit", nb_wagons=nb_wagons, total_unused=total_unused_length, execution_time=temps)
+        print_results(dimension_label="d=1", mode_label="Offline", nb_wagons=nb_wagons, total_unused=total_unused_length, execution_time=temps)
 
         print("Détails du remplissage des premiers wagons :")
         for idx in range(min(5, nb_wagons)):
@@ -76,18 +84,18 @@ if __name__ == "__main__":
                 print(f"    - ID {obj['id']}: {obj['nom']} (L={obj['longueur']}m)")
 
 
-        print("\n\nd=1 Online Best-fit")
+        print("\n\nd=1 Offline Best-fit")
         start_time = time.time()
-        remains_bf, content_bf = best_fit_online(items)
+        remains_bf, content_bf = best_fit_decreasing(items)
         temps = time.time() - start_time
 
-        nb_wagons_bf = len(remains_bf) # Nombre de wagons utilisés
-        total_unused_length_bf = sum(remains_bf) # Somme de l'espace inutilisé dans tous les wagons
+        nb_wagons_bf = len(remains_bf)
+        total_unused_length_bf = sum(remains_bf)
 
-        print_results(dimension_label="d=1", mode_label="Online Best-fit", nb_wagons=nb_wagons_bf, total_unused=total_unused_length_bf, execution_time=temps)
+        print_results(dimension_label="d=1", mode_label="Offline (Best-Fit)", nb_wagons=nb_wagons_bf, total_unused=total_unused_length_bf, execution_time=temps)
 
-        print("Détails du remplissage des premiers wagons :")
-        for idx in range(min(5, nb_wagons_bf)): # Affiche les détails des premiers wagons utilisés
-            print(f"  Wagon {idx + 1} (Espace restant : {remains_bf[idx]:.3f}m) :") 
-            for obj in content_bf[idx]: # Affiche les détails de chaque marchandise dans le wagon
-                print(f"    - ID {obj['id']}: {obj['nom']} (L={obj['longueur']}m)") 
+        print("Détails du remplissage des premiers wagons (Best-Fit) :")
+        for idx in range(min(5, nb_wagons_bf)):
+            print(f"  Wagon {idx + 1} (Espace restant : {remains_bf[idx]:.3f}m) :")
+            for obj in content_bf[idx]:
+                print(f"    - ID {obj['id']}: {obj['nom']} (L={obj['longueur']}m)")
