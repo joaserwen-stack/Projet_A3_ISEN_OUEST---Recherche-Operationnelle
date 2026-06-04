@@ -48,11 +48,11 @@ def best_fit_decreasing(marchandises):
 
         # Si on a trouvé un wagon optimal, on place la marchandise dedans
         if best_idx != -1:
-            wagons[best_idx] -= item['longueur']
-            wagons_content[best_idx].append(item)
+            wagons[best_idx] -= item['longueur'] # On met à jour l'espace restant
+            wagons_content[best_idx].append(item) # On ajoute l'objet au wagon
         else:
             # Sinon on ouvre un nouveau wagon
-            wagons.append(WAGON_MAX_LENGTH - item['longueur'])
+            wagons.append(WAGON_MAX_LENGTH - item['longueur']) # On ajoute un nouveau wagon avec l'espace restant après y avoir placé la marchandise
             wagons_content.append([item])
 
     return wagons, wagons_content

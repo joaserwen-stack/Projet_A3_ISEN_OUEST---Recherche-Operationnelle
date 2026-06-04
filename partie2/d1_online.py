@@ -81,13 +81,13 @@ if __name__ == "__main__":
         remains_bf, content_bf = best_fit_online(items)
         temps = time.time() - start_time
 
-        nb_wagons_bf = len(remains_bf)
-        total_unused_length_bf = sum(remains_bf)
+        nb_wagons_bf = len(remains_bf) # Nombre de wagons utilisés
+        total_unused_length_bf = sum(remains_bf) # Somme de l'espace inutilisé dans tous les wagons
 
         print_results(dimension_label="d=1", mode_label="Online Best-fit", nb_wagons=nb_wagons_bf, total_unused=total_unused_length_bf, execution_time=temps)
 
         print("Détails du remplissage des premiers wagons :")
-        for idx in range(min(5, nb_wagons_bf)):
-            print(f"  Wagon {idx + 1} (Espace restant : {remains_bf[idx]:.3f}m) :")
-            for obj in content_bf[idx]:
-                print(f"    - ID {obj['id']}: {obj['nom']} (L={obj['longueur']}m)")
+        for idx in range(min(5, nb_wagons_bf)): # Affiche les détails des premiers wagons utilisés
+            print(f"  Wagon {idx + 1} (Espace restant : {remains_bf[idx]:.3f}m) :") 
+            for obj in content_bf[idx]: # Affiche les détails de chaque marchandise dans le wagon
+                print(f"    - ID {obj['id']}: {obj['nom']} (L={obj['longueur']}m)") 
