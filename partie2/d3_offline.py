@@ -11,7 +11,9 @@ L_WAG, l_WAG, H_WAG = 11.583, 2.294, 2.569  # Dimensions d'un wagon en mètres
 VOL_WAG = L_WAG * l_WAG * H_WAG
 TEMPS_MAX = 300
 TAILLE_POPULATION = 20
-SEUIL_CATACLYSME = 200  # générations sans amélioration avant reset
+SEUIL_CATACLYSME = 200   # générations sans amélioration avant reset population
+FREQ_OR_OPT = 50         # appliquer Or-opt au meilleur toutes les N générations
+MAX_TIME_OR_OPT = 3.0    # budget temps (s) par appel Or-opt
 
 # ═══════════════════════════════════════════════════════════════════
 # CLASSES
@@ -117,6 +119,34 @@ def evaluer_liste(ordre, dict_items, record_wagons_actuel):
     return nb_wagons, fitness
 
 # ═══════════════════════════════════════════════════════════════════
+# RECHERCHE LOCALE : Or-opt-1 (composante mémétique)
+# Passe unique first-improvement : pour chaque item, teste toutes les
+# positions de réinsertion et applique la première amélioration trouvée.
+# Transforme le GA pur en algorithme mémétique.
+# ═══════════════════════════════════════════════════════════════════
+def local_search_or_opt1(ordre, dict_items, record):
+    current = ordre[:]
+    _, current_fit = evaluer_liste(current, dict_items, record)
+    t_start = time.time()
+
+    for i in range(len(current)):
+        if time.time() - t_start > MAX_TIME_OR_OPT:
+            break
+        item = current[i]
+        sans_item = current[:i] + current[i+1:]
+        for j in range(len(sans_item) + 1):
+            if j == i:
+                continue
+            candidat = sans_item[:j] + [item] + sans_item[j:]
+            _, fit = evaluer_liste(candidat, dict_items, record)
+            if fit < current_fit:
+                current = candidat
+                current_fit = fit
+                break  # first-improvement : passer à l'item suivant
+
+    return current, current_fit
+
+# ═══════════════════════════════════════════════════════════════════
 # OPÉRATEURS GÉNÉTIQUES
 # ═══════════════════════════════════════════════════════════════════
 def croisement_ox(p1, p2):
@@ -135,27 +165,42 @@ def croisement_ox(p1, p2):
             pos = (pos + 1) % n
     return enfant
 
-def mutation_swap(ordre, prob=0.35):
-    """Échange deux positions aléatoires."""
-    if random.random() < prob:
-        idx1, idx2 = random.sample(range(len(ordre)), 2)
-        ordre[idx1], ordre[idx2] = ordre[idx2], ordre[idx1]
+def mutation(ordre, prob=0.35):
+    """3 opérateurs au choix uniforme : swap, insertion, 2-opt (reverse segment)."""
+    if random.random() >= prob:
+        return ordre
+    op = random.randint(0, 2)
+    if op == 0:  # swap
+        i, j = random.sample(range(len(ordre)), 2)
+        ordre[i], ordre[j] = ordre[j], ordre[i]
+    elif op == 1:  # insertion : déplace 1 item vers une autre position
+        i = random.randrange(len(ordre))
+        item = ordre.pop(i)
+        j = random.randrange(len(ordre) + 1)
+        ordre.insert(j, item)
+    else:  # 2-opt : inverse un segment aléatoire
+        i, j = sorted(random.sample(range(len(ordre)), 2))
+        ordre[i:j+1] = ordre[i:j+1][::-1]
     return ordre
 
 # ═══════════════════════════════════════════════════════════════════
 # EXÉCUTION PRINCIPALE
-# Architecture : GA mémétique
-#   - Population : 4 seeds heuristiques + 16 aléatoires
-#   - Sélection  : top-10 élitiste
-#   - Croisement : OX sur permutations
-#   - Mutation   : swap (prob=0.35)
-#   - Cataclysme : si stagnation > SEUIL_CATACLYSME générations,
-#                  garder top-2 et régénérer le reste → diversité forcée
-#   - Pool       : évaluations parallèles sur cpu_count() workers
+# Architecture : GA mémétique V4.0
+#   - Population  : 4 seeds heuristiques + 16 aléatoires
+#   - Sélection   : top-10 élitiste
+#   - Croisement  : OX sur permutations
+#   - Mutation    : 3 opérateurs (swap / insertion / 2-opt), taux adaptatif
+#                   0–50 gens stagnation → prob 0.35
+#                   50–100 gens         → prob 0.50
+#                   100+ gens           → prob 0.65
+#   - Or-opt-1    : recherche locale first-improvement sur meilleur individu
+#                   toutes les FREQ_OR_OPT générations (composante mémétique)
+#   - Cataclysme  : si stagnation > SEUIL_CATACLYSME, garder top-2 + reset
+#   - Pool        : évaluations parallèles sur cpu_count() workers
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 65)
-    print("  D3 OFFLINE - GA V3.0 (DBLF + Best-Fit + Pool + Cataclysme)")
+    print("  D3 OFFLINE - GA MÉMÉTIQUE V4.0 (Or-opt + Multi-mut + Adapt)")
     print("=" * 65)
 
     marchandises = load_marchandises()
@@ -193,22 +238,34 @@ if __name__ == "__main__":
     generation = 0
     meilleur_nb_wagons = float('inf')
     meilleur_fitness = float('inf')
+    meilleur_individu = None
     gens_sans_amelioration = 0
 
     with Pool(processes=n_workers, initializer=_init_pool, initargs=(dict_items,)) as pool:
         while time.time() - t_debut < TEMPS_MAX:
             generation += 1
 
+            # Évaluation parallèle
             args = [(individu, meilleur_nb_wagons) for individu in population]
             resultats = pool.map(_eval_wrapper, args)
             scores_pop = [(nb_w, fit, individu) for (nb_w, fit), individu in zip(resultats, population)]
-
             scores_pop.sort(key=lambda x: x[1])
-            gen_best_nb, gen_best_fit, _ = scores_pop[0]
+            gen_best_nb, gen_best_fit, gen_best_ind = scores_pop[0]
+
+            # Or-opt mémétique : recherche locale sur meilleur individu
+            if generation % FREQ_OR_OPT == 0:
+                improved_ind, improved_fit = local_search_or_opt1(gen_best_ind, dict_items, meilleur_nb_wagons)
+                if improved_fit < gen_best_fit:
+                    gen_best_fit = improved_fit
+                    gen_best_nb = math.floor(improved_fit) + 1
+                    gen_best_ind = improved_ind
+                    scores_pop[0] = (gen_best_nb, gen_best_fit, gen_best_ind)
+                    print(f"   [Gen {generation:04d}] Or-opt amélioration : fitness {improved_fit:.4f}")
 
             if gen_best_fit < meilleur_fitness:
                 meilleur_nb_wagons = gen_best_nb
                 meilleur_fitness = gen_best_fit
+                meilleur_individu = gen_best_ind[:]
                 gens_sans_amelioration = 0
                 taux_dernier = (meilleur_fitness - (meilleur_nb_wagons - 1)) * 100
                 print(f"[Gen {generation:04d}] NOUVEAU RECORD : {meilleur_nb_wagons} wagons (Dernier rempli à {taux_dernier:.1f}%) | Temps : {time.time() - t_debut:.2f}s")
@@ -233,13 +290,20 @@ if __name__ == "__main__":
                 print(f"   [Gen {generation:04d}] *** CATACLYSME *** diversité réinitialisée (top-2 conservé)")
                 continue
 
-            top_10 = [indiv for nb, fit, indiv in scores_pop[:10]]
+            # Mutation adaptative : prob augmente avec la stagnation
+            if gens_sans_amelioration < 50:
+                mut_prob = 0.35
+            elif gens_sans_amelioration < 100:
+                mut_prob = 0.50
+            else:
+                mut_prob = 0.65
 
+            top_10 = [indiv for nb, fit, indiv in scores_pop[:10]]
             enfants = []
             while len(enfants) < 10:
                 p1, p2 = random.sample(top_10, 2)
                 enfant = croisement_ox(p1, p2)
-                enfant = mutation_swap(enfant, prob=0.35)
+                enfant = mutation(enfant, prob=mut_prob)
                 enfants.append(enfant)
 
             population = top_10 + enfants
@@ -250,4 +314,4 @@ if __name__ == "__main__":
     print("-" * 65)
 
     volume_perdu = (meilleur_nb_wagons * VOL_WAG) - vol_total
-    print_results("d=3", "Offline V3.0 (DBLF + Best-Fit + Pool + Cataclysme)", meilleur_nb_wagons, volume_perdu, temps_total)
+    print_results("d=3", "Offline V4.0 (GA Mémétique)", meilleur_nb_wagons, volume_perdu, temps_total)
