@@ -100,7 +100,7 @@ def placer_objet(wagons, objet):
                 score = min(espace_largeur - obj_longueur, espace_hauteur - obj_largeur)
                 if meilleur_score is None or score < meilleur_score:
                     meilleur_score = score
-                    meilleix_choix = (index_wagon, espace_x, espace_y, obj_longueur, obj_largeur, False)
+                    meilleur_choix = (index_wagon, espace_x, espace_y, obj_longueur, obj_largeur, False)
 
             # Essai avec rotation à 90°
             if ok_pivote and obj_largeur <= espace_largeur + EPS and obj_longueur <= espace_hauteur + EPS:

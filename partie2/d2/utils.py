@@ -15,7 +15,7 @@ N_TRIALS = 5
 
 def load_marchandises(csv_filename="Données_marchandises.csv"):
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_dir)
+    project_root = os.path.dirname(os.path.dirname(current_dir))  # d2/ → partie2/ → ProjetRO/
     csv_path = os.path.join(project_root, "data", csv_filename)
 
     marchandises = []
